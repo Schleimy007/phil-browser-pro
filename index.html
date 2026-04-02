@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phil Browser Pro</title>
+    <link rel="icon" href="https://i.imgur.com/jQrZgDb.png" type="image/png">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css">
+    <link rel="stylesheet" href="styles.css">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com https://unpkg.com data:; img-src 'self' data: https: http:; frame-src *; child-src * blob:;">
+</head>
+
+<body class="dark-mode" id="app-body">
+
+    <div class="titlebar">
+        <div class="drag-region"></div>
+        <div class="window-title">Phil Browser Pro <span id="perf-hud" class="perf-hud">RAM: -- MB</span></div>
+        <div class="window-controls">
+            <button class="win-btn" data-win="min"><i class="ph ph-minus"></i></button>
+            <button class="win-btn" data-win="max"><i class="ph ph-square"></i></button>
+            <button class="win-btn close" data-win="close"><i class="ph ph-x"></i></button>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <div class="main-sidebar">
+            <div class="sidebar-top">
+                <button class="nav-btn" id="btn-back" disabled><i class="ph ph-caret-left"></i></button>
+                <button class="nav-btn" id="btn-forward" disabled><i class="ph ph-caret-right"></i></button>
+                <button class="nav-btn" id="btn-reload"><i class="ph ph-arrows-clockwise"></i></button>
+                <button class="nav-btn" id="btn-home"><i class="ph ph-house"></i></button>
+            </div>
+
+            <div class="sidebar-apps" id="sidebar-apps">
+                <button class="app-icon-btn" data-url="https://discord.com/app" title="Discord"><i class="ph ph-discord-logo"></i></button>
+                <button class="app-icon-btn" data-url="https://m.twitch.tv" title="Twitch"><i class="ph ph-twitch-logo"></i></button>
+                <button class="app-icon-btn" data-url="https://open.spotify.com" title="Spotify"><i class="ph ph-spotify-logo"></i></button>
+            </div>
+
+            <div class="sidebar-bottom">
+                <button class="nav-btn" id="btn-notes" title="Notizen"><i class="ph ph-note"></i></button>
+                <button class="nav-btn" id="btn-adblock" title="Ad-Blocker"><i class="ph ph-shield-check text-green"></i> <span id="ad-counter" style="font-size:10px;margin-left:2px;">0</span></button>
+                <button class="nav-btn" id="btn-extensions" title="Erweiterungen" data-modal="extensions-modal"><i class="ph ph-puzzle-piece"></i></button>
+                <button class="nav-btn" id="btn-downloads" title="Downloads (Strg+J)" data-modal="downloads-modal"><i class="ph ph-download-simple"></i></button>
+                <button class="nav-btn" id="btn-menu" title="Menü"><i class="ph ph-list"></i></button>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="top-island">
+                <div class="tabs-container">
+                    <div class="tabs-list" id="tabs-list"></div>
+                    <button class="new-tab-btn" id="btn-new-tab" title="Neuer Tab (Strg+T)"><i class="ph ph-plus"></i></button>
+                </div>
+
+                <div class="omnibox-wrapper">
+                    <div class="omnibox">
+                        <div class="security-indicator" id="security-icon"><i class="ph ph-lock-key"></i></div>
+                        <input type="text" id="url-input" placeholder="Suchen oder URL eingeben..." spellcheck="false">
+                        <button class="action-icon" id="btn-reader" title="Reader Mode"><i class="ph ph-book-open"></i></button>
+                        <button class="action-icon" id="btn-bookmark" title="Lesezeichen (Strg+D)"><i class="ph ph-star"></i></button>
+                    </div>
+                    <div class="omnibox-suggestions" id="omnibox-suggestions"></div>
+                </div>
+            </div>
+
+            <div class="bookmarks-bar-wrapper">
+                <div class="bookmarks-list" id="bookmarks-list"></div>
+            </div>
+
+            <div class="workspace-wrapper">
+                <div class="workspace" id="workspace"></div>
+
+                <div class="sidebar-expanded" id="sidebar">
+                    <div class="sidebar-content" id="sidebar-content">
+                        <webview id="sidebar-webview" src="about:blank" partition="persist:sidebar" allowpopups></webview>
+                    </div>
+                </div>
+
+                <div class="notes-panel" id="notes-panel">
+                    <div class="notes-header">📝 Quick Notes</div>
+                    <textarea id="notes-textarea" placeholder="Schnelle Notizen hier eintragen..."></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="find-bar" class="find-bar">
+        <i class="ph ph-magnifying-glass"></i>
+        <input type="text" id="find-input" placeholder="Suchen auf Seite (Strg+F)...">
+        <button id="find-close" class="win-btn"><i class="ph ph-x"></i></button>
+    </div>
+
+    <div class="dropdown-menu" id="main-menu">
+        <div class="menu-item" id="menu-new-tab"><i class="ph ph-file-plus"></i> Neuer Tab <span class="shortcut">Strg+T</span></div>
+        <div class="menu-item" id="menu-new-private"><i class="ph ph-mask-happy"></i> Neuer Privater Tab <span class="shortcut">Strg+Shift+N</span></div>
+        <div class="menu-item" data-modal="history-modal"><i class="ph ph-clock"></i> Verlauf anzeigen <span class="shortcut">Strg+H</span></div>
+        <div class="menu-item" data-modal="downloads-modal"><i class="ph ph-download-simple"></i> Downloads <span class="shortcut">Strg+J</span></div>
+        <div class="menu-item" id="menu-cmd"><i class="ph ph-terminal-window"></i> Befehlspalette <span class="shortcut">Strg+Shift+P</span></div>
+        <hr>
+        <div class="menu-item" id="menu-zoom-in"><i class="ph ph-magnifying-glass-plus"></i> Vergrößern <span class="shortcut">Strg++</span></div>
+        <div class="menu-item" id="menu-zoom-out"><i class="ph ph-magnifying-glass-minus"></i> Verkleinern <span class="shortcut">Strg+-</span></div>
+        <div class="menu-item" id="menu-fullscreen"><i class="ph ph-corners-out"></i> Vollbild <span class="shortcut">F11</span></div>
+        <hr>
+        <div class="menu-item" id="menu-splitview"><i class="ph ph-columns"></i> Split-View</div>
+        <div class="menu-item" data-modal="settings-modal"><i class="ph ph-gear"></i> Einstellungen</div>
+    </div>
+
+    <div class="cmd-palette-overlay" id="cmd-overlay">
+        <div class="cmd-palette">
+            <div class="cmd-header"><i class="ph ph-magnifying-glass"></i> Befehl ausführen</div>
+            <input type="text" id="cmd-input" placeholder="Tippe einen Befehl..." autocomplete="off">
+            <div class="cmd-results" id="cmd-results"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ Einstellungen</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
+            <div class="modal-body settings-layout">
+                <div class="settings-sidebar">
+                    <div class="set-tab active" data-target="set-general">Allgemein</div>
+                    <div class="set-tab" data-target="set-privacy">Datenschutz & Daten</div>
+                    <div class="set-tab" data-target="set-perf">Performance</div>
+                    <div class="set-tab" data-target="set-shortcuts">Shortcuts</div>
+                </div>
+                <div class="settings-main">
+                    <div id="set-general" class="set-section active">
+                        <h3>Darstellung</h3>
+                        <select id="set-theme" class="set-input">
+                            <option value="auto">Auto (Tag/Nacht Feature)</option>
+                            <option value="dark">Midnight Dark (Modern)</option>
+                            <option value="light">Clean Light</option>
+                            <option value="gaming">Neon Cyberpunk</option>
+                        </select>
+                        <h3 style="margin-top:20px;">Beim Starten öffnen</h3>
+                        <input type="text" id="set-startpage" class="set-input" placeholder="URL (z.B. https://google.com oder 'default')">
+                        <h3 style="margin-top:20px;">Standard-Suchmaschine</h3>
+                        <select id="set-search" class="set-input">
+                            <option value="https://www.google.com/search?q=">Google</option>
+                            <option value="https://www.bing.com/search?q=">Bing</option>
+                            <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
+                            <option value="https://www.ecosia.org/search?q=">Ecosia</option>
+                        </select>
+                    </div>
+                    <div id="set-privacy" class="set-section" style="display:none;">
+                        <h3>Sicherheit</h3>
+                        <div class="toggle-row">
+                            <span>Tracker blockieren (Ad-Blocker)</span>
+                            <label class="switch"><input type="checkbox" id="set-blockers"><span class="slider"></span></label>
+                        </div>
+                        <h3 style="margin-top: 20px;">Browser-Verhalten</h3>
+                        <div class="toggle-row">
+                            <span>Tabs beim Beenden speichern</span>
+                            <label class="switch"><input type="checkbox" id="set-restore-tabs"><span class="slider"></span></label>
+                        </div>
+                        <div class="toggle-row">
+                            <span>Browser-Verlauf beim Beenden löschen</span>
+                            <label class="switch"><input type="checkbox" id="set-clear-exit"><span class="slider"></span></label>
+                        </div>
+                        <div class="toggle-row">
+                            <span>Download-Historie speichern</span>
+                            <label class="switch"><input type="checkbox" id="set-keep-dl"><span class="slider"></span></label>
+                        </div>
+                        <h3 style="margin-top: 20px;">Daten manuell löschen</h3>
+                        <input type="text" id="clear-domain-input" class="set-input" placeholder="Domain (z.B. youtube.com)" style="margin-bottom:10px;">
+                        <button class="set-btn" id="btn-clear-domain">Cookies für Domain löschen</button>
+                        <hr style="margin:20px 0;">
+                        <button class="set-btn danger" id="btn-clear-data">Alle Browserdaten sofort löschen</button>
+                    </div>
+                    <div id="set-perf" class="set-section" style="display:none;">
+                        <h3>Ressourcen</h3>
+                        <div class="toggle-row">
+                            <span>Tab-Snoozing (RAM sparen)</span>
+                            <label class="switch"><input type="checkbox" id="set-snoozing"><span class="slider"></span></label>
+                        </div>
+                        <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Unbenutzte Tabs werden nach 5 Minuten entladen und bei Klick wiederhergestellt.</p>
+                    </div>
+                    <div id="set-shortcuts" class="set-section" style="display:none;">
+                        <h3>Tastenkürzel anpassen</h3>
+                        <p style="font-size:12px;color:var(--text-muted);margin-bottom:20px;">Klicke in ein Feld und drücke die gewünschten Tasten (z.B. STRG + J).</p>
+
+                        <div class="shortcut-row"><span>Neuer Tab</span> <input type="text" id="short-newTab" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Neuer Privater Tab</span> <input type="text" id="short-newPrivateTab" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Tab schließen</span> <input type="text" id="short-closeTab" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>URL-Leiste fokussieren</span> <input type="text" id="short-focusUrl" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Verlauf öffnen</span> <input type="text" id="short-history" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Auf Seite suchen</span> <input type="text" id="short-find" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Seite drucken</span> <input type="text" id="short-print" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                        <div class="shortcut-row"><span>Befehlspalette öffnen</span> <input type="text" id="short-cmdPalette" class="set-input shortcut-input" placeholder="Klicken & Tasten drücken"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="history-modal">
+        <div class="modal-content" style="max-width: 700px;">
+            <div class="modal-header">
+                <h2>🕒 Verlauf</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
+            <div class="modal-body">
+                <input type="text" id="history-search" class="set-input" placeholder="Verlauf durchsuchen..." style="margin: 15px; width: calc(100% - 30px); max-width: none;">
+                <div id="history-list" style="padding: 0 15px 15px; display: flex; flex-direction: column; gap: 8px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="downloads-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📥 Downloads</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
+            <div class="modal-body" id="downloads-list" style="padding: 20px; display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="extensions-modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h2>🧩 Erweiterungen</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
+            <div class="modal-body" id="extensions-list" style="padding: 20px; display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="ai-modal">
+        <div class="modal-content" style="max-width: 600px; height: auto;">
+            <div class="modal-header">
+                <h2>✨ AI Assistent</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
+            <div class="modal-body" id="ai-content" style="line-height: 1.6; padding: 20px;">Lädt...</div>
+        </div>
+    </div>
+
+    <div id="password-prompt" class="password-prompt">
+        <div class="pw-header"><i class="ph ph-key"></i> Passwort speichern?</div>
+        <div class="pw-body">Möchtest du das Passwort für <strong id="pw-domain"></strong> speichern?</div>
+        <div class="pw-actions">
+            <button class="set-btn" id="btn-save-pw">Speichern</button>
+            <button class="set-btn danger" id="btn-ignore-pw">Nein</button>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script src="managers/SettingsManager.js"></script>
+    <script src="managers/PrivacyManager.js"></script>
+    <script src="managers/SessionManager.js"></script>
+    <script src="managers/ExtensionManager.js"></script>
+    <script src="renderer.js"></script>
+</body>
+
+</html>

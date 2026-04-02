@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neuer Tab</title>
+    <link rel="icon" href="https://i.imgur.com/jQrZgDb.png" type="image/png">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com https://unpkg.com; img-src 'self' data: https:;">
+    <style>
+         :root {
+            --bg-main: #0f0f13;
+            --text-main: #ffffff;
+            --text-muted: #8b8b99;
+            --accent: #6366f1;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --border: rgba(255, 255, 255, 0.08);
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-main);
+            background-size: cover;
+            background-position: center;
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        .bg-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15) 0%, var(--bg-main) 100%);
+            z-index: -1;
+        }
+        
+        body.has-bg .bg-overlay {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            animation: fadeUp 0.8s ease-out;
+        }
+        
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .greeting {
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 15px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        
+        .clock {
+            font-size: 4.5rem;
+            font-weight: 700;
+            letter-spacing: -2px;
+            margin-bottom: 5px;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        
+        .date {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+        }
+        
+        .search-box {
+            width: 100%;
+            max-width: 650px;
+            margin-bottom: 40px;
+            position: relative;
+            animation: fadeUp 1s ease-out;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 20px 24px 20px 60px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            color: var(--text-main);
+            font-size: 1.2rem;
+            outline: none;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            transition: 0.3s;
+            box-sizing: border-box;
+        }
+        
+        .search-input:focus {
+            border-color: var(--accent);
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2), 0 20px 40px rgba(0, 0, 0, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .search-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 24px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.5rem;
+            color: var(--text-muted);
+            transition: 0.3s;
+        }
+        
+        .search-input:focus+.search-icon {
+            color: var(--accent);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            max-width: 700px;
+            width: 100%;
+            animation: fadeUp 1.2s ease-out;
+        }
+        
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-decoration: none;
+            color: var(--text-main);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: pointer;
+        }
+        
+        .card:hover {
+            transform: translateY(-8px) scale(1.02);
+            border-color: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card i {
+            font-size: 32px;
+            margin-bottom: 12px;
+            transition: 0.3s;
+        }
+        
+        .card:hover i {
+            transform: scale(1.1);
+        }
+        
+        .card.yt i {
+            color: #ff0000;
+        }
+        
+        .card.tw i {
+            color: #9146FF;
+        }
+        
+        .card.ai i {
+            color: #10b981;
+        }
+        
+        .card.gh i {
+            color: #ffffff;
+        }
+        
+        .card span {
+            font-size: 0.9rem;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        
+        .bg-controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .bg-btn {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: 0.2s;
+        }
+        
+        .bg-btn:hover {
+            color: white;
+            border-color: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-overlay"></div>
+    <div class="header">
+        <div class="greeting" id="greeting">Guten Tag</div>
+        <div class="clock" id="clock">00:00</div>
+        <div class="date" id="date">Lädt...</div>
+    </div>
+
+    <div class="search-box">
+        <input type="text" class="search-input" id="searchInput" placeholder="Im Web suchen..." autofocus autocomplete="off">
+        <i class="ph ph-magnifying-glass search-icon"></i>
+    </div>
+
+    <div class="grid">
+        <a href="https://youtube.com" class="card yt"><i class="ph ph-youtube-logo"></i><span>YouTube</span></a>
+        <a href="https://twitch.tv" class="card tw"><i class="ph ph-twitch-logo"></i><span>Twitch</span></a>
+        <a href="https://chatgpt.com" class="card ai"><i class="ph ph-robot"></i><span>ChatGPT</span></a>
+        <a href="https://github.com" class="card gh"><i class="ph ph-github-logo"></i><span>GitHub</span></a>
+    </div>
+
+    <div class="bg-controls">
+        <button class="bg-btn" onclick="document.getElementById('bg-upload').click()"><i class="ph ph-upload-simple"></i> PC Upload</button>
+        <button class="bg-btn" onclick="changeBgLink()"><i class="ph ph-link"></i> Web Link</button>
+        <button class="bg-btn" onclick="clearBg()"><i class="ph ph-trash"></i> Löschen</button>
+        <input type="file" id="bg-upload" style="display:none" accept="image/*" onchange="handleFileUpload(event)">
+    </div>
+
+    <script>
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('clock').textContent = now.toLocaleTimeString('de-DE', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            document.getElementById('date').textContent = now.toLocaleDateString('de-DE', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+
+            const hour = now.getHours();
+            let greeting = "Guten Tag";
+            if (hour < 11) greeting = "Guten Morgen";
+            else if (hour > 18) greeting = "Guten Abend";
+            document.getElementById('greeting').textContent = greeting;
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        function applyBg(src) {
+            document.body.style.backgroundImage = `url('${src}')`;
+            document.body.classList.add('has-bg');
+        }
+
+        const savedBg = localStorage.getItem('phil_bg_image');
+        if (savedBg) applyBg(savedBg);
+
+        function changeBgLink() {
+            const url = prompt("Gib eine Bild-URL für das Wallpaper ein:", savedBg && savedBg.startsWith('http') ? savedBg : "");
+            if (url) {
+                localStorage.setItem('phil_bg_image', url);
+                applyBg(url);
+            }
+        }
+
+        function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    localStorage.setItem('phil_bg_image', event.target.result);
+                    applyBg(event.target.result);
+                } catch (err) {
+                    alert("Dieses Bild ist leider zu groß für den lokalen Speicher. Bitte nutze ein kleineres Bild oder die Web-Link Funktion.");
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function clearBg() {
+            localStorage.removeItem('phil_bg_image');
+            document.body.style.backgroundImage = 'none';
+            document.body.classList.remove('has-bg');
+        }
+
+        document.getElementById('searchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.value.trim() !== '') {
+                let searchUrl = 'https://www.google.com/search?q=';
+                try {
+                    const settings = JSON.parse(localStorage.getItem('phil_settings_v4'));
+                    if (settings && settings.searchEngine) {
+                        searchUrl = settings.searchEngine;
+                    }
+                } catch (err) {}
+                window.location.href = searchUrl + encodeURIComponent(e.target.value.trim());
+            }
+        });
+    </script>
+</body>
+
+</html>

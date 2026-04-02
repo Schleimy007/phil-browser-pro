@@ -1,0 +1,47 @@
+{
+    "name": "phil-browser-pro",
+    "version": "2.0.0",
+    "description": "Ein moderner Browser vom YouTuber Phil3663",
+    "main": "main.js",
+    "scripts": {
+        "start": "electron .",
+        "build": "electron-builder --win"
+    },
+    "author": "Schleimy",
+    "license": "MIT",
+    "dependencies": {
+        "discord-rpc": "^4.0.1",
+        "electron-updater": "^6.1.7"
+    },
+    "devDependencies": {
+        "electron": "^29.0.0",
+        "electron-builder": "^24.13.3",
+        "eslint": "^8.57.1"
+    },
+    "build": {
+        "appId": "com.schleimy.browserpro",
+        "productName": "Phil Browser Pro",
+        "directories": {
+            "output": "dist"
+        },
+        "win": {
+            "target": "nsis",
+            "icon": "icon.ico"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true,
+            "shortcutName": "Phil Browser Pro",
+            "installerIcon": "icon.ico",
+            "uninstallerIcon": "icon.ico",
+            "uninstallDisplayName": "Phil Browser Pro entfernen"
+        },
+        "publish": [{
+            "provider": "github",
+            "owner": "Schleimy007",
+            "repo": "phil-browser-pro"
+        }]
+    }
+}

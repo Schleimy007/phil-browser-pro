@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keine Internetverbindung</title>
+    <link rel="icon" href="https://i.imgur.com/jQrZgDb.png" type="image/png">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0f0f13;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .offline-text {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .offline-text h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+            color: #ef4444;
+        }
+        
+        .offline-text p {
+            color: #8b8b99;
+            font-size: 14px;
+        }
+        
+        canvas {
+            border: 2px solid #333;
+            background: #000;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+        }
+        
+        .controls {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="offline-text">
+        <h1>Keine Internetverbindung 🦖</h1>
+        <p>Aber hey, spiel doch eine Runde Space Defender bis es wieder geht!</p>
+    </div>
+
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+    <div class="controls">Pfeiltasten zum Bewegen | Leertaste zum Schießen</div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let player = {
+            x: 275,
+            y: 360,
+            width: 50,
+            height: 20,
+            color: "#6366f1",
+            speed: 6,
+            dx: 0
+        };
+        let bullets = [];
+        let enemies = [];
+        let score = 0;
+        let gameOver = false;
+
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 8; c++) {
+                enemies.push({
+                    x: 50 + c * 60,
+                    y: 30 + r * 40,
+                    width: 40,
+                    height: 20,
+                    color: "#10b981",
+                    active: true
+                });
+            }
+        }
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowLeft") player.dx = -player.speed;
+            if (e.key === "ArrowRight") player.dx = player.speed;
+            if (e.key === " " && !gameOver) bullets.push({
+                x: player.x + player.width / 2 - 2,
+                y: player.y,
+                width: 4,
+                height: 10,
+                color: "#eab308",
+                speed: 7
+            });
+        });
+
+        document.addEventListener("keyup", (e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") player.dx = 0;
+        });
+
+        function update() {
+            if (gameOver) return;
+
+            player.x += player.dx;
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+
+            bullets.forEach((b, i) => {
+                b.y -= b.speed;
+                if (b.y < 0) bullets.splice(i, 1);
+            });
+
+            bullets.forEach((b, bIndex) => {
+                enemies.forEach((e, eIndex) => {
+                    if (e.active && b.x < e.x + e.width && b.x + b.width > e.x && b.y < e.y + e.height && b.y + b.height > e.y) {
+                        e.active = false;
+                        bullets.splice(bIndex, 1);
+                        score += 10;
+                    }
+                });
+            });
+
+            if (enemies.filter(e => e.active).length === 0) gameOver = true;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+
+            bullets.forEach(b => {
+                ctx.fillStyle = b.color;
+                ctx.fillRect(b.x, b.y, b.width, b.height);
+            });
+
+            enemies.forEach(e => {
+                if (e.active) {
+                    ctx.fillStyle = e.color;
+                    ctx.fillRect(e.x, e.y, e.width, e.height);
+                }
+            });
+
+            ctx.fillStyle = "white";
+            ctx.font = "16px Arial";
+            ctx.fillText("Score: " + score, 10, 20);
+
+            if (gameOver) {
+                ctx.fillStyle = "#10b981";
+                ctx.font = "30px Arial";
+                ctx.fillText("GEWONNEN! Du bist bereit fürs Internet.", 50, 200);
+            }
+
+            requestAnimationFrame(() => {
+                update();
+                draw();
+            });
+        }
+        draw();
+    </script>
+</body>
+
+</html>
