@@ -17,10 +17,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateAdblocker: (enabled) => ipcRenderer.send('update-adblocker', enabled),
     findInPage: (data) => ipcRenderer.send('find-in-page', data),
     updateActivity: (data) => ipcRenderer.send('update-activity', data),
-
-    // NEU: Passwörter sichern
     saveCredentials: (data) => ipcRenderer.invoke('save-credentials', data),
     getCredentials: (domain) => ipcRenderer.invoke('get-credentials', domain),
+
+    isDefaultBrowser: () => ipcRenderer.invoke('is-default-browser'),
+    setAsDefaultBrowser: () => ipcRenderer.invoke('set-as-default-browser'),
+    getDRMState: () => ipcRenderer.invoke('get-drm-state'),
+    setDRMState: (state) => ipcRenderer.invoke('set-drm-state', state),
+
+    getStartArgs: () => ipcRenderer.invoke('get-start-args'),
+    
+    fetchImage: (url) => ipcRenderer.invoke('fetch-image', url),
+    fetchAI: (messages) => ipcRenderer.invoke('fetch-ai', messages),
 
     onAdBlocked: (callback) => ipcRenderer.on('ad-blocked', (event, count) => callback(count)),
     onDownloadStart: (callback) => ipcRenderer.on('download-start', (event, data) => callback(data)),
@@ -28,5 +36,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onDownloadDone: (callback) => ipcRenderer.on('download-done', (event, data) => callback(data)),
     onAIAction: (callback) => ipcRenderer.on('ai-action', (event, data) => callback(data)),
     onTabAction: (callback) => ipcRenderer.on('tab-action', (event, data) => callback(data)),
-    onExecuteFind: (callback) => ipcRenderer.on('execute-find', (event, data) => callback(data))
+    onExecuteFind: (callback) => ipcRenderer.on('execute-find', (event, data) => callback(data)),
+    onShowToast: (callback) => ipcRenderer.on('show-toast', (event, msg) => callback(msg))
 });

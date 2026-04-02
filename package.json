@@ -1,11 +1,12 @@
 {
     "name": "phil-browser-pro",
-    "version": "2.0.0",
+    "version": "7.3.0",
     "description": "Ein moderner Browser vom YouTuber Phil3663",
     "main": "main.js",
     "scripts": {
         "start": "electron .",
-        "build": "electron-builder --win"
+        "build": "electron-builder --win",
+        "publish": "electron-builder --win -p always"
     },
     "author": "Schleimy",
     "license": "MIT",
@@ -14,7 +15,7 @@
         "electron-updater": "^6.1.7"
     },
     "devDependencies": {
-        "electron": "^29.0.0",
+        "electron": "^29.4.6",
         "electron-builder": "^24.13.3",
         "eslint": "^8.57.1"
     },
@@ -28,6 +29,10 @@
             "target": "nsis",
             "icon": "icon.ico"
         },
+        "protocols": [{
+            "name": "Phil Browser Pro Links",
+            "schemes": ["http", "https"]
+        }],
         "nsis": {
             "oneClick": false,
             "allowToChangeInstallationDirectory": true,
