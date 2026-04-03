@@ -77,6 +77,7 @@
                     <div class="sidebar-content" id="sidebar-content">
                         <webview id="sidebar-webview" src="about:blank" partition="persist:sidebar" allowpopups></webview>
                     </div>
+                    <div class="app-sidebar-resizer" id="app-sidebar-resizer"></div>
                 </div>
 
                 <div class="notes-panel" id="notes-panel">
@@ -229,6 +230,25 @@
             <div class="modal-header">
                 <h2>✨ AI Assistent</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
             <div class="modal-body" id="ai-content" style="line-height: 1.6; padding: 20px;">Lädt...</div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="update-modal" style="background: rgba(0,0,0,0.85); z-index: 100000;">
+        <div class="modal-content" style="max-width: 450px; height: auto; border: 2px solid var(--accent);">
+            <div class="modal-header" style="background: var(--accent); border-bottom: none;">
+                <h2 style="color: white; font-weight: 700;">🚀 NEUES UPDATE VERFÜGBAR</h2>
+                <button class="win-btn" id="btn-close-update" style="color: white;"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 30px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                <i class="ph ph-rocket-launch" style="font-size: 50px; color: var(--accent);"></i>
+                <p style="font-size: 15px; color: var(--text-main); margin-bottom: 10px;">Eine neue Version von Phil Browser Pro ist da!</p>
+                <button class="set-btn" id="btn-download-update" style="width: 100%; padding: 12px 20px; font-size: 15px; font-weight: bold;">
+                    <i class="ph ph-download-simple"></i> HIER DOWNLOADEN
+                </button>
+                <button class="set-btn" id="btn-install-update" style="width: 100%; padding: 12px 20px; font-size: 15px; font-weight: bold; background: var(--success); display: none;">
+                    <i class="ph ph-check-circle"></i> JETZT INSTALLIEREN & NEUSTARTEN
+                </button>
+            </div>
         </div>
     </div>
 

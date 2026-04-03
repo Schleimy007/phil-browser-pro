@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearCookies: (domain) => ipcRenderer.invoke('clear-cookies', domain),
     getExtensions: () => ipcRenderer.invoke('get-extensions'),
     saveExtensionState: (id, state) => ipcRenderer.send('save-extension-state', id, state),
+    installExtension: () => ipcRenderer.invoke('install-extension'), 
     downloadAction: (data) => ipcRenderer.send('download-action', data),
     updateAdblocker: (enabled) => ipcRenderer.send('update-adblocker', enabled),
     findInPage: (data) => ipcRenderer.send('find-in-page', data),
@@ -37,5 +38,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAIAction: (callback) => ipcRenderer.on('ai-action', (event, data) => callback(data)),
     onTabAction: (callback) => ipcRenderer.on('tab-action', (event, data) => callback(data)),
     onExecuteFind: (callback) => ipcRenderer.on('execute-find', (event, data) => callback(data)),
-    onShowToast: (callback) => ipcRenderer.on('show-toast', (event, msg) => callback(msg))
+    onShowToast: (callback) => ipcRenderer.on('show-toast', (event, msg) => callback(msg)),
+
+    // --- NEU: AUTO UPDATER BINDINGS ---
+    onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, version) => callback(version)),
+    onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', () => callback()),
+    downloadUpdate: () => ipcRenderer.send('download-update'),
+    installUpdate: () => ipcRenderer.send('install-update'),
+    quitApp: () => ipcRenderer.send('quit-app')
 });

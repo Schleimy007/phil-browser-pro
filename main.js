@@ -1,16 +1,32 @@
 // main.js
-const { app, BrowserWindow, session, ipcMain, Menu, MenuItem, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Menu, MenuItem, shell, safeStorage, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater'); 
 const path = require('path');
 const fs = require('fs');
 
-const drmConfigPath = path.join(app.getPath('userData'), 'drm_config.json');
+// --- WICHTIG: Pfade setzen BEVOR app ready ist, um Background-Crash zu vermeiden ---
+const userDataPath = path.join(app.getPath('appData'), 'phil-browser-data');
+app.setPath('userData', userDataPath);
+
+const drmConfigPath = path.join(userDataPath, 'drm_config.json');
 let drmEnabled = false;
 try {
     if (fs.existsSync(drmConfigPath)) {
         drmEnabled = JSON.parse(fs.readFileSync(drmConfigPath, 'utf8')).enabled;
     }
 } catch(e) {}
+
+// --- FIX 1: Verhindert das nervige Windows Passkey (WebAuthn) Popup komplett ---
+app.commandLine.appendSwitch('disable-features', 'WebAuthentication,WebAuthenticationUI');
+
+// Performance Flags
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
+app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
+
+// --- FIX 2: Absolut kugelsicherer Chrome User-Agent für Google Login ---
+const CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+app.userAgentFallback = CHROME_USER_AGENT;
 
 if (process.defaultApp) {
     if (process.argv.length >= 2) {
@@ -34,13 +50,6 @@ try {
     console.log("Discord RPC Modul nicht gefunden.");
 }
 
-const userDataPath = path.join(app.getPath('appData'), 'phil-browser-data');
-app.setPath('userData', userDataPath);
-
-app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
-app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
-
 const gotTheLock = app.requestSingleInstanceLock();
 let adblockEnabled = true;
 
@@ -53,10 +62,6 @@ if (!gotTheLock) {
     const activeDownloads = new Map();
 
     function createWindow() {
-        if (drmEnabled) {
-            app.userAgentFallback = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-        }
-
         mainWindow = new BrowserWindow({
             width: 1400,
             height: 900,
@@ -68,12 +73,37 @@ if (!gotTheLock) {
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
-                sandbox: true,
-                webviewTag: true,
+                webviewTag: true, 
                 plugins: drmEnabled,
                 webSecurity: false, 
                 preload: path.join(__dirname, 'preload.js')
             }
+        });
+
+        // --- TIEFER SESSION FIX (Google Login & Popups) ---
+        const sessionsToFix = [
+            session.defaultSession, 
+            session.fromPartition('in-memory'), 
+            session.fromPartition('persist:session')
+        ];
+        
+        sessionsToFix.forEach(sess => {
+            sess.setPermissionRequestHandler((webContents, permission, callback) => {
+                if (permission === 'security-key') {
+                    return callback(false); 
+                }
+                callback(true);
+            });
+
+            sess.webRequest.onBeforeSendHeaders({ 
+                urls: ['*://*.google.com/*', '*://*.accounts.google.com/*', '*://*.youtube.com/*'] 
+            }, (details, callback) => {
+                details.requestHeaders['User-Agent'] = CHROME_USER_AGENT;
+                delete details.requestHeaders['sec-ch-ua'];
+                delete details.requestHeaders['sec-ch-ua-mobile'];
+                delete details.requestHeaders['sec-ch-ua-platform'];
+                callback({ cancel: false, requestHeaders: details.requestHeaders });
+            });
         });
 
         mainWindow.loadFile('index.html');
@@ -87,8 +117,55 @@ if (!gotTheLock) {
         setupDownloadManager();
         setupContextMenus();
         setupExtensions();
+
+        // --- AUTO UPDATER LOGIK ---
+        autoUpdater.autoDownload = false; 
+        
+        autoUpdater.on('update-available', (info) => {
+            if (mainWindow) mainWindow.webContents.send('update-available', info.version);
+        });
+
+        autoUpdater.on('update-downloaded', () => {
+            if (mainWindow) mainWindow.webContents.send('update-downloaded');
+        });
+
         autoUpdater.checkForUpdatesAndNotify();
     }
+
+    // --- APP LIFECYCLE ---
+    app.whenReady().then(() => {
+        createWindow();
+        app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) createWindow();
+        });
+    });
+
+    app.on('window-all-closed', () => {
+        if (process.platform !== 'darwin') app.quit();
+    });
+
+    app.on('second-instance', (event, commandLine, workingDirectory) => { 
+        if (mainWindow) { 
+            if (mainWindow.isMinimized()) mainWindow.restore(); 
+            mainWindow.focus(); 
+            for (let i = 1; i < commandLine.length; i++) {
+                const target = commandLine[i];
+                if (!target.startsWith('-') && fs.existsSync(target) && fs.statSync(target).isFile()) {
+                    const ext = path.extname(target).toLowerCase();
+                    if (SUPPORTED_FILES.includes(ext) || ext === '') {
+                        const fileUrl = 'file:///' + target.replace(/\\/g, '/');
+                        mainWindow.webContents.send('tab-action', { action: 'new-tab-url', url: fileUrl });
+                        break;
+                    }
+                }
+            }
+        } 
+    });
+
+    // --- IPC HANDLERS ---
+    ipcMain.on('download-update', () => { autoUpdater.downloadUpdate(); });
+    ipcMain.on('install-update', () => { autoUpdater.quitAndInstall(true, true); });
+    ipcMain.on('quit-app', () => { app.quit(); });
 
     ipcMain.handle('get-drm-state', () => drmEnabled);
     ipcMain.handle('set-drm-state', (event, state) => {
@@ -119,99 +196,197 @@ if (!gotTheLock) {
         return null;
     });
 
-    // BILD-KOMPRESSOR: Verhindert den "Input required" Crash, indem er das Bild winzig macht!
     ipcMain.handle('fetch-image', async (event, rect) => {
         try {
             const win = BrowserWindow.getFocusedWindow();
             if (!win) return null;
-            
             const captureRect = { x: Math.max(0, rect.x - 20), y: Math.max(0, rect.y - 20), width: 350, height: 250 };
             let image = await win.webContents.capturePage(captureRect);
             if (image.isEmpty()) return null;
-            
             image = image.resize({ width: 300 }); 
             const jpegBuffer = image.toJPEG(70); 
             return `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
-        } catch (e) {
-            return null;
-        }
+        } catch (e) { return null; }
     });
 
-    // AUTO-PILOT: Wenn die KI oder das Deep-Search Plugin abstürzt, rettet das Skript die Anfrage
-ipcMain.handle('fetch-ai', async (event, messagesArray) => {
-        try {
-            if (!Array.isArray(messagesArray) || messagesArray.length === 0) {
-                return { success: false, error: "Leerer Chatverlauf." };
-            }
-
-            // Liste der Modelle nach Stabilität sortiert
-            const modelsToTry = [
-                'google/gemini-2.0-flash-lite-preview-02-05:free',
-                'openai/gpt-4o-mini',
-                'meta-llama/llama-3.3-70b-instruct:free'
-            ];
-
-            let lastError = "Keine Antwort vom Server.";
-
-            for (const model of modelsToTry) {
-                // Erster Versuch: Mit Deep Search (Web Plugin)
-                let payload = { 
-                    model: model, 
-                    messages: messagesArray,
-                    plugins: [{ id: "web", max_results: 3 }] 
-                };
-
-                // Wenn Bilder im Spiel sind, Plugins deaktivieren (inkompatibel bei vielen Providern)
-                const hasImage = messagesArray.some(m => 
-                    Array.isArray(m.content) && m.content.some(c => c.type === 'image_url')
-                );
-                if (hasImage) delete payload.plugins;
-
-                const callAPI = async (currentPayload) => {
-                    return await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                        method: 'POST',
-                        headers: { 
-                            'Authorization': 'Bearer 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', 
-                            'Content-Type': 'application/json',
-                            'HTTP-Referer': 'https://philbrowser.com',
-                            'X-Title': 'PhilBrowser'
-                        },
-                        body: JSON.stringify(currentPayload)
-                    });
-                };
-
-                try {
-                    let response = await callAPI(payload);
-                    
-                    // FALLBACK 1: Wenn "Provider Error" kommt, versuche es ohne Plugins
-                    if (!response.ok && payload.plugins) {
-                        delete payload.plugins;
-                        response = await callAPI(payload);
-                    }
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.choices && data.choices.length > 0) {
-                            return { 
-                                success: true, 
-                                text: data.choices[0].message.content, 
-                                usedModel: model 
-                            };
-                        }
-                    } else {
-                        const errData = await response.json();
-                        lastError = errData.error?.message || `HTTP ${response.status}`;
-                    }
-                } catch (e) {
-                    lastError = "Netzwerkfehler: " + e.message;
+    ipcMain.handle('install-extension', async () => {
+        const { dialog } = require('electron');
+        const result = await dialog.showOpenDialog({ title: 'Erweiterungs-Ordner auswählen', properties: ['openDirectory'] });
+        if (!result.canceled && result.filePaths.length > 0) {
+            const sourcePath = result.filePaths[0];
+            const extName = path.basename(sourcePath);
+            const destPath = path.join(app.getPath('userData'), 'extensions', extName);
+            try {
+                if (!fs.existsSync(path.join(app.getPath('userData'), 'extensions'))) {
+                    fs.mkdirSync(path.join(app.getPath('userData'), 'extensions'), { recursive: true });
                 }
-            }
+                fs.cpSync(sourcePath, destPath, { recursive: true });
+                return { success: true, name: extName };
+            } catch (err) { return { success: false, error: err.message }; }
+        }
+        return { success: false, canceled: true };
+    });
+
+    // --- NEU: DEEP SEARCH & NATIVE GEMINI API (Spare Credits + Live Google Suche) ---
+    ipcMain.handle('fetch-ai', async (event, messagesArray) => {
+        try {
+            if (!Array.isArray(messagesArray) || messagesArray.length === 0) return { success: false, error: "Leerer Chatverlauf." };
             
-            return { success: false, error: lastError };
-        } catch (error) {
-            return { success: false, error: error.message };
+            const GOOGLE_API_KEY = "AIzaSyDLCxowgHj5tgo7lsNCm1Lu_wjV6nw350U";
+            
+            // Format für die direkte, offizielle Gemini API anpassen
+            let contents = [];
+            let sysInstr = null;
+
+            messagesArray.forEach(m => {
+                if (m.role === 'system') {
+                    sysInstr = m.content;
+                    return;
+                }
+                let parts = [];
+                if (Array.isArray(m.content)) {
+                    m.content.forEach(c => {
+                        if (c.type === 'text') parts.push({ text: c.text });
+                        if (c.type === 'image_url') {
+                            parts.push({
+                                inlineData: {
+                                    mimeType: "image/jpeg",
+                                    data: c.image_url.url.split(',')[1]
+                                }
+                            });
+                        }
+                    });
+                } else {
+                    parts.push({ text: m.content });
+                }
+                contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: parts });
+            });
+
+            // Wir nutzen gemini-2.5-flash: Extrem intelligent, free tier, unterstützt Google Deep Search perfekt!
+            const modelName = "gemini-2.5-flash"; 
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GOOGLE_API_KEY}`;
+            
+            const payload = {
+                contents: contents,
+                tools: [{ googleSearch: {} }] // HIER WIRD DIE DEEP SEARCH VON GOOGLE AKTIVIERT!
+            };
+            if (sysInstr) {
+                payload.systemInstruction = { parts: [{ text: sysInstr }] };
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            
+            if (!response.ok) {
+                return { success: false, error: data.error?.message || `HTTP ${response.status}` };
+            }
+
+            let text = data.candidates[0].content.parts[0].text;
+            let sources = [];
+            
+            // Extrahiere die Google-Suchergebnisse (Grounding Metadata), damit der Browser sie hübsch mit Logos anzeigen kann!
+            if (data.candidates[0].groundingMetadata && data.candidates[0].groundingMetadata.groundingChunks) {
+                sources = data.candidates[0].groundingMetadata.groundingChunks.map(chunk => {
+                    if (chunk.web && chunk.web.uri) {
+                        return { title: chunk.web.title, url: chunk.web.uri };
+                    }
+                    return null;
+                }).filter(Boolean);
+            }
+
+            return { success: true, text: text, usedModel: modelName, sources: sources };
+        } catch (error) { return { success: false, error: error.message }; }
+    });
+
+    ipcMain.handle('get-app-path', () => app.getAppPath());
+    
+    ipcMain.handle('get-memory-info', async () => {
+        try {
+            return process.getSystemMemoryInfo();
+        } catch(e) {
+            return process.getBlinkMemoryInfo(); 
         }
     });
+
+    ipcMain.handle('get-extensions', async () => {
+        const extPath = path.join(app.getPath('userData'), 'extensions');
+        const statesFile = path.join(app.getPath('userData'), 'extensions_state.json');
+        let states = {};
+        try { if (fs.existsSync(statesFile)) states = JSON.parse(fs.readFileSync(statesFile, 'utf8')); } catch(e){}
+        let exts = [];
+        if (fs.existsSync(extPath)) {
+            try {
+                const dirs = fs.readdirSync(extPath).filter(f => fs.statSync(path.join(extPath, f)).isDirectory());
+                for (const d of dirs) {
+                    let manifest = {}, script = null, css = null;
+                    if (fs.existsSync(path.join(extPath, d, 'manifest.json'))) manifest = JSON.parse(fs.readFileSync(path.join(extPath, d, 'manifest.json'), 'utf8'));
+                    if (fs.existsSync(path.join(extPath, d, 'script.js'))) script = fs.readFileSync(path.join(extPath, d, 'script.js'), 'utf8'); 
+                    if (fs.existsSync(path.join(extPath, d, 'style.css'))) css = fs.readFileSync(path.join(extPath, d, 'style.css'), 'utf8'); 
+                    exts.push({ id: d, manifest, script, css, enabled: states[d] !== false }); 
+                }
+            } catch (e) {} 
+        }
+        return exts;
+    });
+
+    const loginsPath = path.join(app.getPath('userData'), 'logins.json');
+    ipcMain.handle('save-credentials', (event, { domain, username, password }) => {
+        let logins = {}; if (fs.existsSync(loginsPath)) logins = JSON.parse(fs.readFileSync(loginsPath, 'utf8'));
+        const encrypted = safeStorage.encryptString(password).toString('base64');
+        logins[domain] = { username, password: encrypted };
+        fs.writeFileSync(loginsPath, JSON.stringify(logins));
+        return true;
+    });
+
+    ipcMain.handle('get-credentials', (event, domain) => {
+        if (!fs.existsSync(loginsPath)) return null;
+        const logins = JSON.parse(fs.readFileSync(loginsPath, 'utf8'));
+        if (logins[domain]) { try { const decrypted = safeStorage.decryptString(Buffer.from(logins[domain].password, 'base64')); return { username: logins[domain].username, password: decrypted }; } catch (e) { return null; } }
+        return null;
+    });
+
+    ipcMain.handle('clear-data', async() => { await session.defaultSession.clearStorageData(); if (fs.existsSync(loginsPath)) fs.unlinkSync(loginsPath); return true; });
+    ipcMain.handle('clear-cookies', async(event, domain) => { const cookies = await session.defaultSession.cookies.get({ domain }); for (const c of cookies) { let url = (c.secure ? 'https://' : 'http://') + c.domain + c.path; await session.defaultSession.cookies.remove(url, c.name); } return true; });
+
+    // --- IPC ON (EVENTS) ---
+    ipcMain.on('save-extension-state', (event, id, state) => { 
+        const statesFile = path.join(app.getPath('userData'), 'extensions_state.json'); 
+        let states = {}; 
+        if (fs.existsSync(statesFile)) states = JSON.parse(fs.readFileSync(statesFile, 'utf8')); 
+        states[id] = state; 
+        fs.writeFileSync(statesFile, JSON.stringify(states)); 
+    });
+    
+    ipcMain.on('open-folder', (e, folderPath) => shell.showItemInFolder(folderPath));
+    ipcMain.on('open-file', (e, filePath) => shell.openPath(filePath));
+    ipcMain.on('update-adblocker', (event, enabled) => { adblockEnabled = enabled; });
+    ipcMain.on('update-activity', (event, data) => {
+        if (!rpc) return;
+        try { rpc.setActivity({ details: "Benutzt Phil Browser Pro 🚀", state: data.state, startTimestamp: data.startTimestamp, largeImageKey: 'https://i.imgur.com/jQrZgDb.png', largeImageText: 'Phil Browser Pro', buttons: [{ label: "📥 Browser Downloaden", url: "https://drive.google.com/file/d/12eB1KL0irguTkEuwftYhiTLXOmc7mSnf/view" }], instance: false, }); } catch (e) {}
+    });
+
+    ipcMain.on('window-control', (e, command) => { 
+        if (!mainWindow) return; 
+        if (command === 'min') mainWindow.minimize(); 
+        if (command === 'max') mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); 
+        if (command === 'close') mainWindow.close(); 
+    });
+    
+    ipcMain.on('download-action', (e, { id, action }) => { 
+        const item = activeDownloads.get(id); 
+        if (item) { 
+            if (action === 'pause') item.pause(); 
+            if (action === 'resume') item.resume(); 
+            if (action === 'cancel') { item.cancel(); activeDownloads.delete(id); } 
+        } 
+    });
+
+    ipcMain.on('find-in-page', (event, { tabId, text }) => { if (mainWindow) mainWindow.webContents.send('execute-find', { tabId, text }); });
 
     ipcMain.on('set-wallpaper', async (event, imageUrl) => {
         try {
@@ -388,66 +563,4 @@ ipcMain.handle('fetch-ai', async (event, messagesArray) => {
             menu.popup(BrowserWindow.fromWebContents(event.sender));
         });
     }
-
-    app.on('second-instance', (event, commandLine, workingDirectory) => { 
-        if (mainWindow) { 
-            if (mainWindow.isMinimized()) mainWindow.restore(); 
-            mainWindow.focus(); 
-            
-            for (let i = 1; i < commandLine.length; i++) {
-                const target = commandLine[i];
-                if (!target.startsWith('-') && fs.existsSync(target) && fs.statSync(target).isFile()) {
-                    const ext = path.extname(target).toLowerCase();
-                    if (SUPPORTED_FILES.includes(ext) || ext === '') {
-                        const fileUrl = 'file:///' + target.replace(/\\/g, '/');
-                        mainWindow.webContents.send('tab-action', { action: 'new-tab-url', url: fileUrl });
-                        break;
-                    }
-                }
-            }
-        } 
-    });
-    
-    app.whenReady().then(() => createWindow());
-    app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-
-    const loginsPath = path.join(app.getPath('userData'), 'logins.json');
-    ipcMain.handle('save-credentials', (event, { domain, username, password }) => {
-        let logins = {}; if (fs.existsSync(loginsPath)) logins = JSON.parse(fs.readFileSync(loginsPath, 'utf8'));
-        const encrypted = safeStorage.encryptString(password).toString('base64');
-        logins[domain] = { username, password: encrypted };
-        fs.writeFileSync(loginsPath, JSON.stringify(logins));
-        return true;
-    });
-    ipcMain.handle('get-credentials', (event, domain) => {
-        if (!fs.existsSync(loginsPath)) return null;
-        const logins = JSON.parse(fs.readFileSync(loginsPath, 'utf8'));
-        if (logins[domain]) { try { const decrypted = safeStorage.decryptString(Buffer.from(logins[domain].password, 'base64')); return { username: logins[domain].username, password: decrypted }; } catch (e) { return null; } }
-        return null;
-    });
-
-    ipcMain.handle('get-memory-info', async() => process.getSystemMemoryInfo());
-    ipcMain.handle('get-app-path', () => app.getAppPath());
-    ipcMain.on('update-adblocker', (event, enabled) => { adblockEnabled = enabled; });
-    ipcMain.on('update-activity', (event, data) => {
-        if (!rpc) return;
-        try { rpc.setActivity({ details: "Benutzt Phil Browser Pro 🚀", state: data.state, startTimestamp: data.startTimestamp, largeImageKey: 'https://i.imgur.com/jQrZgDb.png', largeImageText: 'Phil Browser Pro', buttons: [{ label: "📥 Browser Downloaden", url: "https://drive.google.com/file/d/12eB1KL0irguTkEuwftYhiTLXOmc7mSnf/view" }], instance: false, }); } catch (e) {}
-    });
-    ipcMain.handle('clear-data', async() => { await session.defaultSession.clearStorageData(); if (fs.existsSync(loginsPath)) fs.unlinkSync(loginsPath); return true; });
-    ipcMain.handle('clear-cookies', async(event, domain) => { const cookies = await session.defaultSession.cookies.get({ domain }); for (const c of cookies) { let url = (c.secure ? 'https://' : 'http://') + c.domain + c.path; await session.defaultSession.cookies.remove(url, c.name); } return true; });
-    ipcMain.handle('get-extensions', async() => {
-        const extPath = path.join(app.getPath('userData'), 'extensions');
-        const statesFile = path.join(app.getPath('userData'), 'extensions_state.json');
-        let states = {}; if (fs.existsSync(statesFile)) states = JSON.parse(fs.readFileSync(statesFile, 'utf8'));
-        const exts = []; if (!fs.existsSync(extPath)) return exts;
-        const dirs = fs.readdirSync(extPath);
-        for (const d of dirs) { try { const manifest = JSON.parse(fs.readFileSync(path.join(extPath, d, 'manifest.json'), 'utf8')); let script = '', css = ''; if (fs.existsSync(path.join(extPath, d, 'script.js'))) script = fs.readFileSync(path.join(extPath, d, 'script.js'), 'utf8'); if (fs.existsSync(path.join(extPath, d, 'style.css'))) css = fs.readFileSync(path.join(extPath, d, 'style.css'), 'utf8'); exts.push({ id: d, manifest, script, css, enabled: states[d] !== false }); } catch (e) {} }
-        return exts;
-    });
-    ipcMain.on('save-extension-state', (event, id, state) => { const statesFile = path.join(app.getPath('userData'), 'extensions_state.json'); let states = {}; if (fs.existsSync(statesFile)) states = JSON.parse(fs.readFileSync(statesFile, 'utf8')); states[id] = state; fs.writeFileSync(statesFile, JSON.stringify(states)); });
-    ipcMain.on('open-folder', (e, folderPath) => shell.showItemInFolder(folderPath));
-    ipcMain.on('open-file', (e, filePath) => shell.openPath(filePath));
-    ipcMain.on('window-control', (e, command) => { if (!mainWindow) return; if (command === 'min') mainWindow.minimize(); if (command === 'max') mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); if (command === 'close') mainWindow.close(); });
-    ipcMain.on('download-action', (e, { id, action }) => { const item = activeDownloads.get(id); if (item) { if (action === 'pause') item.pause(); if (action === 'resume') item.resume(); if (action === 'cancel') { item.cancel(); activeDownloads.delete(id); } } });
-    ipcMain.on('find-in-page', (event, { tabId, text }) => { if (mainWindow) mainWindow.webContents.send('execute-find', { tabId, text }); });
 }

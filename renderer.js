@@ -2,7 +2,6 @@
 let START_PAGE = '';
 const sessionStartTime = Date.now();
 
-// 🛡️ DEINE PERFEKTE PROFI-VERSION DES XSS-FILTERS
 const escapeHTML = (str) => {
     if (!str) return '';
     return str.replace(/[&<>'"]/g, tag => ({
@@ -28,6 +27,31 @@ function stringToColor(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
     return `hsl(${Math.abs(hash) % 360}, 80%, 60%)`;
+}
+
+function sendNotification(title, body) {
+    if (Notification.permission === "granted") {
+        new Notification(title, { body: body, icon: 'https://i.imgur.com/jQrZgDb.png' });
+    } else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then(p => {
+            if (p === "granted") new Notification(title, { body });
+        });
+    }
+}
+
+function recordTabVisit(url, title) {
+    if (!url || url.startsWith('chrome://') || url.includes('start.html')) return;
+    let memory = JSON.parse(localStorage.getItem('ai_tab_memory') || '[]');
+    let existing = memory.find(m => m.url === url);
+    if (existing) { 
+        existing.visits++; 
+        existing.lastVisit = Date.now(); 
+        existing.title = title || existing.title;
+    } else { 
+        memory.push({url, title: title || url, visits: 1, lastVisit: Date.now()}); 
+    }
+    memory.sort((a,b) => b.visits - a.visits);
+    localStorage.setItem('ai_tab_memory', JSON.stringify(memory.slice(0, 20)));
 }
 
 class BrowserApp {
@@ -60,13 +84,13 @@ class BrowserApp {
     }
 
     async init() {
+        Notification.requestPermission(); 
+
         const appPath = await window.electronAPI.getAppPath();
         this.appPath = appPath;
-        
-        window.IS_DRM_ENABLED = await window.electronAPI.getDRMState();
+        window.IS_DRM_ENABLED = await window.electronAPI.getDRMState(); 
 
         const fileArgUrl = await window.electronAPI.getStartArgs();
-
         let customStart = this.settings.get('startPage');
 
         if (fileArgUrl) {
@@ -100,22 +124,42 @@ class BrowserApp {
         const today = new Date().toDateString();
         let usage = JSON.parse(localStorage.getItem('phil_ai_usage')) || { date: today, count: 0 };
         if (usage.date !== today) usage = { date: today, count: 0 };
-        if (usage.count >= 150) return false;
+        if (usage.count >= 150) {
+            sendNotification("KI Limit", "Du hast heute bereits 150 KI-Anfragen gestellt.");
+            return false;
+        }
         usage.count++;
         localStorage.setItem('phil_ai_usage', JSON.stringify(usage));
         return usage.count;
     }
 
     setupIPC() {
+        window.electronAPI.onUpdateAvailable((version) => {
+            const modal = document.getElementById('update-modal');
+            if (modal) modal.classList.add('active');
+        });
+
+        window.electronAPI.onUpdateDownloaded(() => {
+            const btnDl = document.getElementById('btn-download-update');
+            const btnInst = document.getElementById('btn-install-update');
+            if (btnDl) btnDl.style.display = 'none';
+            if (btnInst) btnInst.style.display = 'flex';
+        });
+
         window.electronAPI.onShowToast((msg) => this.ui.showToast(msg));
-        window.electronAPI.onAdBlocked((count) => document.getElementById('ad-counter').textContent = count);
+        window.electronAPI.onAdBlocked((count) => {
+            const c = document.getElementById('ad-counter');
+            if (c) c.textContent = count;
+        });
         window.electronAPI.onDownloadStart((data) => this.ui.handleDownloadStart(data));
         window.electronAPI.onDownloadProgress((data) => this.ui.handleDownloadProgress(data));
         window.electronAPI.onDownloadDone((data) => this.ui.handleDownloadDone(data));
 
+        // --- KI INTERFACE (MIT DEEP SEARCH UI & TYPEWRITER EFFEKT) ---
         window.electronAPI.onAIAction(async(data) => {
             this.ui.showModal('ai-modal');
             const aiContent = document.getElementById('ai-content');
+            if (!aiContent) return;
             
             const usageCount = this.checkAILimit();
             if (!usageCount) {
@@ -158,6 +202,7 @@ class BrowserApp {
             const chatCounter = document.getElementById('chat-counter');
 
             const appendMessage = (role, htmlContent) => {
+                if (!chatMessages) return;
                 const msg = document.createElement('div');
                 msg.className = `chat-bubble ${role === 'user' ? 'chat-user' : 'chat-ai'}`;
                 msg.innerHTML = htmlContent;
@@ -168,7 +213,8 @@ class BrowserApp {
             const triggerAI = async () => {
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('assistant', `<span id="${loadingId}"><i class="ph ph-spinner ph-spin text-green"></i> KI denkt nach...</span>`);
-                chatInput.disabled = true; chatSend.disabled = true;
+                if (chatInput) chatInput.disabled = true; 
+                if (chatSend) chatSend.disabled = true;
 
                 try {
                     const result = await window.electronAPI.fetchAI(this.currentChatHistory);
@@ -178,25 +224,83 @@ class BrowserApp {
 
                     if (!result.success) {
                          appendMessage('assistant', `<span style="color:var(--danger);">🚨 API Fehler: ${escapeHTML(result.error)}</span>`);
+                         if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
+                         if (chatSend) chatSend.disabled = false;
                     } else {
                          this.currentChatHistory.push({ role: 'assistant', content: result.text });
-                         appendMessage('assistant', formatAIResponse(result.text));
-                         if(result.usedModel) {
-                             document.getElementById('ai-model-info').innerHTML = `<i class="ph ph-cpu"></i> Läuft auf: ${escapeHTML(result.usedModel.split('/')[1] || 'Auto')}`;
+                         
+                         const msgId = 'msg-' + Date.now();
+                         let sourcesHtml = '';
+                         
+                         // Wenn die KI gegoogelt hat, die Sources-Dropdown-Box bauen
+                         if (result.sources && result.sources.length > 0) {
+                             const uniqueSources = [];
+                             const seenUrls = new Set();
+                             result.sources.forEach(s => {
+                                 if(!seenUrls.has(s.url)) { seenUrls.add(s.url); uniqueSources.push(s); }
+                             });
+                             sourcesHtml = `
+                                 <details class="ai-sources-details">
+                                     <summary><i class="ph ph-globe-hemisphere-west"></i> Im Web gesucht (${uniqueSources.length} Quellen)</summary>
+                                     <div class="ai-sources-list">
+                                         ${uniqueSources.map(s => `
+                                             <a href="#" class="ai-source-item" title="${escapeHTML(s.title)}" onclick="window.browserApp.tabManager.createTab('${escapeHTML(s.url)}'); return false;">
+                                                 <img src="https://www.google.com/s2/favicons?domain=${new URL(s.url).hostname}&sz=32" alt="icon">
+                                                 <span>${escapeHTML(s.title)}</span>
+                                             </a>
+                                         `).join('')}
+                                     </div>
+                                 </details>
+                             `;
                          }
+                         
+                         appendMessage('assistant', `<div id="${msgId}">${sourcesHtml}<div class="typewriter-content"></div></div>`);
+                         const contentDiv = document.getElementById(msgId).querySelector('.typewriter-content');
+                         
+                         const formattedText = formatAIResponse(result.text);
+                         let i = 0;
+                         let isTag = false;
+                         let currentHTML = '';
+                         
+                         // Typewriter Effekt (wie bei mir)
+                         const typeWriter = () => {
+                             if (i < formattedText.length) {
+                                 if (formattedText.charAt(i) === '<') isTag = true;
+                                 currentHTML += formattedText.charAt(i);
+                                 i++;
+                                 if (isTag) {
+                                     while(i < formattedText.length && formattedText.charAt(i-1) !== '>') {
+                                         currentHTML += formattedText.charAt(i);
+                                         i++;
+                                     }
+                                     isTag = false;
+                                 }
+                                 contentDiv.innerHTML = currentHTML;
+                                 chatMessages.scrollTop = chatMessages.scrollHeight;
+                                 setTimeout(typeWriter, Math.floor(Math.random() * 10) + 5);
+                             } else {
+                                 if(result.usedModel) {
+                                     const mi = document.getElementById('ai-model-info');
+                                     if(mi) mi.innerHTML = `<i class="ph ph-cpu"></i> Läuft auf: ${escapeHTML(result.usedModel)}`;
+                                 }
+                                 if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
+                                 if (chatSend) chatSend.disabled = false;
+                             }
+                         };
+                         typeWriter();
                     }
                 } catch (err) {
                     const loadingEl = document.getElementById(loadingId);
                     if (loadingEl) loadingEl.parentElement.remove();
                     appendMessage('assistant', `<span style="color:var(--danger);">🚨 Systemfehler: ${escapeHTML(err.message)}</span>`);
+                    if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
+                    if (chatSend) chatSend.disabled = false;
                 }
-
-                chatInput.disabled = false; chatSend.disabled = false;
-                chatInput.focus();
             };
 
             if (data.type === 'image') {
-                document.getElementById('ai-model-info').innerHTML = '<i class="ph ph-image"></i> Bild-Modus (Auto-Fallback)';
+                const aiModelInfo = document.getElementById('ai-model-info');
+                if (aiModelInfo) aiModelInfo.innerHTML = '<i class="ph ph-image"></i> Bild-Modus';
 
                 initialDisplayHTML = `<strong>${escapeHTML(data.task)}</strong><br><img src="${data.url}" style="max-height: 100px; border-radius: 8px; margin-top: 10px;">`;
                 appendMessage('user', initialDisplayHTML);
@@ -205,7 +309,8 @@ class BrowserApp {
                 appendMessage('assistant', `<span id="${loadingId}"><i class="ph ph-spinner ph-spin text-green"></i> Mache Screenshot...</span>`);
                 
                 const base64Data = await window.electronAPI.fetchImage({ x: data.x, y: data.y });
-                document.getElementById(loadingId).parentElement.remove();
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) loadingEl.parentElement.remove();
 
                 if (!base64Data) {
                     appendMessage('assistant', `<span style="color:var(--danger);">🚨 Fehler: Konnte den Bereich nicht scannen.</span>`);
@@ -221,9 +326,10 @@ class BrowserApp {
                 });
                 await triggerAI();
             } else {
-                document.getElementById('ai-model-info').innerHTML = '<i class="ph ph-magnifying-glass"></i> Deep Search aktiv';
+                const aiModelInfo = document.getElementById('ai-model-info');
+                if(aiModelInfo) aiModelInfo.innerHTML = '<i class="ph ph-magnifying-glass"></i> Deep Search bereit';
                 
-                initialDisplayHTML = `<strong>Aktion:</strong> ${escapeHTML(data.task)}<br><i>"${escapeHTML(data.text)}"</i>`;
+                initialDisplayHTML = `<strong>Aktion:</strong> ${escapeHTML(data.task)}<br><i>"${escapeHTML(data.text).substring(0,200)}..."</i>`;
                 appendMessage('user', initialDisplayHTML);
                 
                 this.currentChatHistory.push({ role: 'user', content: `${data.task}\n\n${data.text}` });
@@ -231,6 +337,7 @@ class BrowserApp {
             }
 
             const handleSend = async () => {
+                if (!chatInput) return;
                 const text = chatInput.value.trim();
                 if (!text) return;
                 
@@ -242,20 +349,18 @@ class BrowserApp {
 
                 chatInput.value = '';
                 this.currentChatUses++;
-                chatCounter.textContent = `${this.currentChatUses}/20 Nachrichten`;
+                if (chatCounter) chatCounter.textContent = `${this.currentChatUses}/20 Nachrichten`;
 
                 appendMessage('user', escapeHTML(text));
-                
                 this.currentChatHistory.push({ role: 'user', content: text });
-                
                 await triggerAI();
             };
 
-            chatSend.addEventListener('click', handleSend);
-            chatInput.addEventListener('keydown', (e) => {
+            if (chatSend) chatSend.addEventListener('click', handleSend);
+            if (chatInput) chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') handleSend();
             });
-            setTimeout(() => chatInput.focus(), 100);
+            setTimeout(() => { if(chatInput) chatInput.focus(); }, 100);
         });
 
         window.electronAPI.onTabAction((data) => {
@@ -316,8 +421,10 @@ class BrowserApp {
                 const mem = await window.electronAPI.getMemoryInfo();
                 const freeMB = Math.round(mem.free / 1024);
                 const hud = document.getElementById('perf-hud');
-                hud.textContent = `RAM: ${freeMB} MB frei`;
-                hud.className = `perf-hud ${freeMB < 1000 ? 'critical' : (freeMB < 2048 ? 'warning' : '')}`;
+                if (hud) {
+                    hud.textContent = `RAM: ${freeMB} MB frei`;
+                    hud.className = `perf-hud ${freeMB < 1000 ? 'critical' : (freeMB < 2048 ? 'warning' : '')}`;
+                }
             } catch (e) {}
         }, 3000);
     }
@@ -331,10 +438,14 @@ class TabManager {
         this.tabCounter = 0;
         this.isSplit = false;
 
-        document.getElementById('btn-new-tab').addEventListener('click', () => this.createTab());
-        document.getElementById('menu-new-private').addEventListener('click', () => {
+        const btnNewTab = document.getElementById('btn-new-tab');
+        if(btnNewTab) btnNewTab.addEventListener('click', () => this.createTab());
+        
+        const menuNewPriv = document.getElementById('menu-new-private');
+        if(menuNewPriv) menuNewPriv.addEventListener('click', () => {
             this.createTab(START_PAGE, true);
-            document.getElementById('main-menu').classList.remove('active');
+            const menu = document.getElementById('main-menu');
+            if (menu) menu.classList.remove('active');
         });
 
         setInterval(() => this.checkSnoozing(), 60000);
@@ -357,7 +468,8 @@ class TabManager {
         }
 
         webview.setAttribute('partition', isPrivate ? 'in-memory' : 'persist:session');
-        document.getElementById('workspace').appendChild(webview);
+        const workspace = document.getElementById('workspace');
+        if (workspace) workspace.appendChild(webview);
 
         const tabEl = document.createElement('div');
         tabEl.className = `tab ${isPrivate ? 'private-tab' : ''}`;
@@ -384,12 +496,15 @@ class TabManager {
             e.preventDefault();
             window.electronAPI.showTabMenu(id);
         });
-        tabEl.querySelector('.tab-close').addEventListener('click', (e) => {
+        
+        const closeBtn = tabEl.querySelector('.tab-close');
+        if(closeBtn) closeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this.closeTab(id);
         });
 
-        tabEl.querySelector('.tab-mute').addEventListener('click', (e) => {
+        const muteBtn = tabEl.querySelector('.tab-mute');
+        if (muteBtn) muteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             const isMuted = webview.isAudioMuted();
             webview.setAudioMuted(!isMuted);
@@ -400,7 +515,8 @@ class TabManager {
         tabEl.addEventListener('dragover', (e) => e.preventDefault());
         tabEl.addEventListener('drop', (e) => this.handleDrop(e, id));
 
-        document.getElementById('tabs-list').appendChild(tabEl);
+        const tabsList = document.getElementById('tabs-list');
+        if (tabsList) tabsList.appendChild(tabEl);
 
         const tabData = { id, webview, tabEl, url, title: 'Neu', isPrivate, isSnoozed: lazy, lastActive: Date.now(), currentZoom: 1, isReady: false };
         this.tabs.set(id, tabData);
@@ -439,6 +555,7 @@ class TabManager {
                     if (this.app.history.length > 2000) this.app.history.pop();
                     localStorage.setItem('phil_history', JSON.stringify(this.app.history));
                 }
+                recordTabVisit(eUrl, titleToSave);
             }
             this.app.session.saveSession();
         };
@@ -515,14 +632,16 @@ class TabManager {
 
         webview.addEventListener('page-title-updated', (e) => {
             tabData.title = e.title;
-            document.getElementById(`title-${id}`).textContent = e.title;
+            const titleEl = document.getElementById(`title-${id}`);
+            if (titleEl) titleEl.textContent = e.title;
             tabEl.title = e.title + "\n" + tabData.url;
             if (this.activeTabId === id) this.app.ui.updateDiscordPresence(tabData);
         });
 
         webview.addEventListener('page-favicon-updated', (e) => {
             if (e.favicons && e.favicons.length > 0) {
-                document.getElementById(`icon-${id}`).innerHTML = `<img src="${e.favicons[0]}" alt="">`;
+                const iconEl = document.getElementById(`icon-${id}`);
+                if (iconEl) iconEl.innerHTML = `<img src="${e.favicons[0]}" alt="">`;
             }
         });
 
@@ -573,7 +692,8 @@ class TabManager {
         this.app.ui.updateDiscordPresence(currentTab);
         currentTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
 
-        document.getElementById('find-bar').classList.remove('active');
+        const findBar = document.getElementById('find-bar');
+        if (findBar) findBar.classList.remove('active');
         this.app.session.saveSession();
     }
 
@@ -599,7 +719,7 @@ class TabManager {
             const tabsList = document.getElementById('tabs-list');
             const draggedEl = document.getElementById(`ui-${draggedId}`);
             const targetEl = document.getElementById(`ui-${targetId}`);
-            tabsList.insertBefore(draggedEl, targetEl);
+            if (tabsList && draggedEl && targetEl) tabsList.insertBefore(draggedEl, targetEl);
         }
     }
 
@@ -619,7 +739,8 @@ class TabManager {
 
     toggleSplitView() {
         this.isSplit = !this.isSplit;
-        document.getElementById('workspace').classList.toggle('split-active', this.isSplit);
+        const workspace = document.getElementById('workspace');
+        if(workspace) workspace.classList.toggle('split-active', this.isSplit);
         this.switchTab(this.activeTabId);
     }
 }
@@ -630,14 +751,17 @@ class OmniboxController {
         this.input = document.getElementById('url-input');
         this.suggestionsBox = document.getElementById('omnibox-suggestions');
 
-        this.input.addEventListener('input', (e) => this.handleInput(e.target.value));
-        this.input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                this.navigate(this.input.value);
-                this.hideSuggestions();
-                this.input.blur();
-            }
-        });
+        if (this.input) {
+            this.input.addEventListener('input', (e) => this.handleInput(e.target.value));
+            this.input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    this.navigate(this.input.value);
+                    this.hideSuggestions();
+                    this.input.blur();
+                }
+            });
+        }
+        
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.omnibox-wrapper')) this.hideSuggestions();
         });
@@ -673,7 +797,8 @@ class OmniboxController {
     }
 
     showSuggestions(items) {
-            this.suggestionsBox.innerHTML = items.map(item => `
+        if(!this.suggestionsBox) return;
+        this.suggestionsBox.innerHTML = items.map(item => `
             <div class="suggestion-item" data-url="${escapeHTML(item.url)}">
                 <i class="ph ${item.isBookmark ? 'ph-star text-star' : (item.url.startsWith('http') ? 'ph-clock' : 'ph-magnifying-glass')}"></i>
                 <div class="sugg-text">
@@ -687,14 +812,14 @@ class OmniboxController {
         this.suggestionsBox.querySelectorAll('.suggestion-item').forEach(el => {
             el.addEventListener('click', () => {
                 const url = el.getAttribute('data-url');
-                this.input.value = url;
+                if(this.input) this.input.value = url;
                 this.navigate(url);
                 this.hideSuggestions();
             });
         });
     }
 
-    hideSuggestions() { this.suggestionsBox.classList.remove('active'); }
+    hideSuggestions() { if(this.suggestionsBox) this.suggestionsBox.classList.remove('active'); }
 
     navigate(query) {
         const activeTab = this.app.tabManager.tabs.get(this.app.tabManager.activeTabId);
@@ -719,25 +844,28 @@ class CommandPalette {
         this.results = document.getElementById('cmd-results');
         
         this.commands = [
-            { name: "Split-View umschalten", icon: "ph-columns", action: () => document.getElementById('menu-splitview').click() },
+            { name: "Split-View umschalten", icon: "ph-columns", action: () => { const btn = document.getElementById('menu-splitview'); if(btn) btn.click(); } },
             { name: "Einstellungen öffnen", icon: "ph-gear", action: () => this.app.ui.showModal('settings-modal') },
             { name: "Neuer Tab", icon: "ph-plus", action: () => this.app.tabManager.createTab() },
             { name: "Neuer Privater Tab", icon: "ph-mask-happy", action: () => this.app.tabManager.createTab(START_PAGE, true) },
             { name: "Erweiterungen", icon: "ph-puzzle-piece", action: () => this.app.ui.showModal('extensions-modal') },
             { name: "Verlauf durchsuchen", icon: "ph-clock", action: () => this.app.ui.showModal('history-modal') },
-            { name: "Downloads anzeigen", icon: "ph-download", action: () => document.querySelector('[data-modal="downloads-modal"]').click() },
+            { name: "Downloads anzeigen", icon: "ph-download", action: () => { const btn = document.querySelector('[data-modal="downloads-modal"]'); if(btn) btn.click(); } },
             { name: "Screenshot der Seite", icon: "ph-camera", action: () => this.app.ui.takeScreenshot() },
             { name: "Farbpipette (Color Picker)", icon: "ph-eyedropper", action: () => this.app.ui.pickColor() },
             { name: "Seite Drucken", icon: "ph-printer", action: () => this.app.ui.getActiveWebview()?.print() },
-            { name: "Notizen öffnen", icon: "ph-note", action: () => document.getElementById('btn-notes').click() }
+            { name: "Notizen öffnen", icon: "ph-note", action: () => { const btn = document.getElementById('btn-notes'); if(btn) btn.click(); } }
         ];
 
-        document.getElementById('menu-cmd').onclick = () => this.open();
-        this.input.addEventListener('input', (e) => this.renderResults(e.target.value.toLowerCase()));
-        this.overlay.addEventListener('click', (e) => { if(e.target === this.overlay) this.close(); });
+        const btnMenuCmd = document.getElementById('menu-cmd');
+        if(btnMenuCmd) btnMenuCmd.onclick = () => this.open();
+        
+        if(this.input) this.input.addEventListener('input', (e) => this.renderResults(e.target.value.toLowerCase()));
+        if(this.overlay) this.overlay.addEventListener('click', (e) => { if(e.target === this.overlay) this.close(); });
     }
 
     open() {
+        if(!this.overlay || !this.input) return;
         this.overlay.classList.add('active');
         this.input.value = '';
         this.input.focus();
@@ -745,10 +873,11 @@ class CommandPalette {
     }
 
     close() {
-        this.overlay.classList.remove('active');
+        if(this.overlay) this.overlay.classList.remove('active');
     }
 
     renderResults(query) {
+        if(!this.results) return;
         this.results.innerHTML = '';
         const filtered = this.commands.filter(c => c.name.toLowerCase().includes(query));
         filtered.forEach(c => {
@@ -772,7 +901,7 @@ class UIManager {
     injectDRMToggle() {
         setTimeout(() => {
             const settingsBody = document.querySelector('#settings-modal .modal-body');
-            if (settingsBody) {
+            if (settingsBody && !document.getElementById('toggle-drm')) {
                 const drmHtml = `
                 <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
                     <div style="flex: 1;">
@@ -786,10 +915,13 @@ class UIManager {
                 </div>`;
                 settingsBody.insertAdjacentHTML('beforeend', drmHtml);
 
-                document.getElementById('toggle-drm').addEventListener('change', async (e) => {
-                    const enable = e.target.checked;
-                    await window.electronAPI.setDRMState(enable);
-                });
+                const btnDrm = document.getElementById('toggle-drm');
+                if (btnDrm) {
+                    btnDrm.addEventListener('change', async (e) => {
+                        const enable = e.target.checked;
+                        await window.electronAPI.setDRMState(enable);
+                    });
+                }
             }
         }, 500);
     }
@@ -797,15 +929,21 @@ class UIManager {
     showPasswordPrompt(domain, username, password) {
         const prompt = document.getElementById('password-prompt');
         if (!prompt) return;
-        document.getElementById('pw-domain').textContent = domain;
+        
+        const pwDomain = document.getElementById('pw-domain');
+        if(pwDomain) pwDomain.textContent = domain;
+        
         prompt.classList.add('active');
         
-        document.getElementById('btn-save-pw').onclick = async () => {
+        const btnSave = document.getElementById('btn-save-pw');
+        if(btnSave) btnSave.onclick = async () => {
             await window.electronAPI.saveCredentials({ domain, username, password });
             prompt.classList.remove('active');
             this.showToast('Passwort sicher gespeichert! 🔐');
         };
-        document.getElementById('btn-ignore-pw').onclick = () => prompt.classList.remove('active');
+        
+        const btnIgnore = document.getElementById('btn-ignore-pw');
+        if(btnIgnore) btnIgnore.onclick = () => prompt.classList.remove('active');
     }
 
     showDefaultBrowserPrompt() {
@@ -813,19 +951,31 @@ class UIManager {
         if (!prompt) return;
         prompt.classList.add('active');
         
-        document.getElementById('btn-set-default').onclick = async () => {
+        const btnSetDef = document.getElementById('btn-set-default');
+        if(btnSetDef) btnSetDef.onclick = async () => {
             await window.electronAPI.setAsDefaultBrowser();
             prompt.classList.remove('active');
             this.showToast('Einstellungen geöffnet! Wähle Phil Browser Pro aus. 🚀');
         };
-        document.getElementById('btn-ignore-default').onclick = () => prompt.classList.remove('active');
+        
+        const btnIgnDef = document.getElementById('btn-ignore-default');
+        if(btnIgnDef) btnIgnDef.onclick = () => prompt.classList.remove('active');
     }
 
     initNotes() {
         const notesArea = document.getElementById('notes-textarea');
-        notesArea.value = localStorage.getItem('phil_notes') || '';
-        notesArea.addEventListener('input', (e) => localStorage.setItem('phil_notes', e.target.value));
-        document.getElementById('btn-notes').onclick = () => document.getElementById('notes-panel').classList.toggle('active');
+        if (notesArea) {
+            notesArea.value = localStorage.getItem('phil_notes') || '';
+            notesArea.addEventListener('input', (e) => localStorage.setItem('phil_notes', e.target.value));
+        }
+        
+        const btnNotes = document.getElementById('btn-notes');
+        if (btnNotes) {
+            btnNotes.onclick = () => {
+                const notesPanel = document.getElementById('notes-panel');
+                if(notesPanel) notesPanel.classList.toggle('active');
+            };
+        }
     }
 
     updateDiscordPresence(tab) {
@@ -896,108 +1046,271 @@ class UIManager {
     deleteHistoryItem(url) {
         this.app.history = this.app.history.filter(h => h.url !== url);
         localStorage.setItem('phil_history', JSON.stringify(this.app.history));
-        this.renderHistory(document.getElementById('history-search').value);
+        const searchInput = document.getElementById('history-search');
+        this.renderHistory(searchInput ? searchInput.value : '');
     }
 
     setupEventListeners() {
-        document.querySelectorAll('.win-btn[data-win]').forEach(btn => btn.addEventListener('click', () => window.electronAPI.windowControl(btn.getAttribute('data-win'))));
+        const btnDlUpdate = document.getElementById('btn-download-update');
+        if (btnDlUpdate) {
+            btnDlUpdate.addEventListener('click', () => {
+                btnDlUpdate.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Lade herunter... Bitte warten';
+                btnDlUpdate.disabled = true;
+                btnDlUpdate.style.opacity = '0.7';
+                window.electronAPI.downloadUpdate();
+            });
+        }
+
+        const btnInstUpdate = document.getElementById('btn-install-update');
+        if (btnInstUpdate) {
+            btnInstUpdate.addEventListener('click', () => {
+                window.electronAPI.installUpdate();
+            });
+        }
+
+        const btnCloseUpdate = document.getElementById('btn-close-update');
+        if (btnCloseUpdate) {
+            btnCloseUpdate.addEventListener('click', () => {
+                window.electronAPI.quitApp(); 
+            });
+        }
+
+        const btnInstall = document.getElementById('btn-install-plugin');
+        if (btnInstall) {
+            btnInstall.onclick = async () => {
+                const result = await window.electronAPI.installExtension();
+                if (result.success) {
+                    sendNotification("Plugin Installiert", `Erweiterung ${result.name} wurde installiert! Starte neu, um sie zu sehen.`);
+                    this.showToast(`Plugin ${result.name} installiert!`);
+                }
+            };
+        }
+
+        const btnAiSum = document.getElementById('btn-ai-summarize');
+        if (btnAiSum) {
+            btnAiSum.onclick = async () => {
+                const wv = this.getActiveWebview();
+                if (!wv) return;
+                try {
+                    const text = await wv.executeJavaScript('document.body.innerText');
+                    if (text && text.trim().length > 0) {
+                        window.electronAPI.onAIAction({ type: 'explain', task: 'Fasse diese Seite zusammen:', text: text.substring(0, 3000) });
+                    }
+                } catch (e) { this.showToast('Konnte Text nicht lesen.'); }
+            };
+        }
+
+        const resizer = document.getElementById('sidebar-resizer');
+        if(resizer) {
+            let isResizing = false;
+            resizer.addEventListener('mousedown', () => {
+                isResizing = true;
+                document.querySelectorAll('webview').forEach(wv => wv.style.pointerEvents = 'none');
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const newWidth = Math.max(64, Math.min(e.clientX, 400));
+                document.documentElement.style.setProperty('--sidebar-width', `${newWidth}px`);
+            });
+            document.addEventListener('mouseup', () => {
+                if(isResizing) {
+                    isResizing = false;
+                    document.querySelectorAll('webview').forEach(wv => wv.style.pointerEvents = 'all');
+                    localStorage.setItem('phil_sidebar_width', document.documentElement.style.getPropertyValue('--sidebar-width'));
+                }
+            });
+            const savedWidth = localStorage.getItem('phil_sidebar_width');
+            if(savedWidth) document.documentElement.style.setProperty('--sidebar-width', savedWidth);
+        }
+
+        const appResizer = document.getElementById('app-sidebar-resizer');
+        if (appResizer) {
+            let isAppResizing = false;
+            appResizer.addEventListener('mousedown', () => {
+                isAppResizing = true;
+                appResizer.classList.add('active');
+                document.body.style.cursor = 'ew-resize';
+                document.querySelectorAll('webview').forEach(wv => wv.style.pointerEvents = 'none');
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!isAppResizing) return;
+                const wrapper = document.querySelector('.workspace-wrapper');
+                if (!wrapper) return;
+                const rect = wrapper.getBoundingClientRect();
+                let newWidth = Math.max(300, Math.min(e.clientX - rect.left, rect.width - 50));
+                document.documentElement.style.setProperty('--app-sidebar-width', `${newWidth}px`);
+            });
+            document.addEventListener('mouseup', () => {
+                if(isAppResizing) {
+                    isAppResizing = false;
+                    appResizer.classList.remove('active');
+                    document.body.style.cursor = 'default';
+                    document.querySelectorAll('webview').forEach(wv => wv.style.pointerEvents = 'all');
+                    localStorage.setItem('phil_app_sidebar_width', document.documentElement.style.getPropertyValue('--app-sidebar-width'));
+                }
+            });
+            const savedAppWidth = localStorage.getItem('phil_app_sidebar_width');
+            if(savedAppWidth) document.documentElement.style.setProperty('--app-sidebar-width', savedAppWidth);
+        }
+
+        document.querySelectorAll('.win-btn[data-win]').forEach(btn => {
+            btn.addEventListener('click', () => window.electronAPI.windowControl(btn.getAttribute('data-win')))
+        });
         
-        document.getElementById('btn-back').onclick = () => { try { this.getActiveWebview()?.goBack(); } catch(e){} };
-        document.getElementById('btn-forward').onclick = () => { try { this.getActiveWebview()?.goForward(); } catch(e){} };
-        document.getElementById('btn-reload').onclick = () => { try { this.getActiveWebview()?.reload(); } catch(e){} };
+        const btnBack = document.getElementById('btn-back');
+        if(btnBack) btnBack.onclick = () => { try { this.getActiveWebview()?.goBack(); } catch(e){} };
         
-        document.getElementById('btn-home').onclick = () => this.getActiveWebview()?.loadURL(START_PAGE);
-        document.getElementById('btn-bookmark').onclick = () => {
-            const wv = this.getActiveWebview();
-            if (!wv) return;
-            const url = wv.getURL();
-            if (url.includes('start.html')) return;
-            const title = wv.getTitle() || url;
-            const existsIndex = this.app.bookmarks.findIndex(b => b.url === url);
-            if (existsIndex >= 0) {
-                this.app.bookmarks.splice(existsIndex, 1);
-                document.getElementById('btn-bookmark').classList.remove('is-bookmarked');
-                this.showToast('Lesezeichen entfernt');
-            } else {
-                this.app.bookmarks.push({ url, title });
-                document.getElementById('btn-bookmark').classList.add('is-bookmarked');
-                this.showToast('Lesezeichen gespeichert!');
-            }
-            localStorage.setItem('phil_bookmarks', JSON.stringify(this.app.bookmarks));
-            this.renderBookmarks();
-        };
-        document.getElementById('btn-menu').onclick = (e) => { e.stopPropagation(); document.getElementById('main-menu').classList.toggle('active'); };
-        document.querySelectorAll('[data-modal]').forEach(btn => btn.addEventListener('click', () => { this.showModal(btn.getAttribute('data-modal')); document.getElementById('main-menu').classList.remove('active'); }));
-        document.querySelectorAll('.close-modal').forEach(btn => btn.addEventListener('click', (e) => e.target.closest('.modal-overlay').classList.remove('active')));
-        document.getElementById('history-search')?.addEventListener('input', (e) => this.renderHistory(e.target.value));
+        const btnFwd = document.getElementById('btn-forward');
+        if(btnFwd) btnFwd.onclick = () => { try { this.getActiveWebview()?.goForward(); } catch(e){} };
+        
+        const btnRel = document.getElementById('btn-reload');
+        if(btnRel) btnRel.onclick = () => { try { this.getActiveWebview()?.reload(); } catch(e){} };
+        
+        const btnHome = document.getElementById('btn-home');
+        if(btnHome) btnHome.onclick = () => this.getActiveWebview()?.loadURL(START_PAGE);
+        
+        const btnBookmark = document.getElementById('btn-bookmark');
+        if (btnBookmark) {
+            btnBookmark.onclick = () => {
+                const wv = this.getActiveWebview();
+                if (!wv) return;
+                const url = wv.getURL();
+                if (url.includes('start.html')) return;
+                const title = wv.getTitle() || url;
+                const existsIndex = this.app.bookmarks.findIndex(b => b.url === url);
+                if (existsIndex >= 0) {
+                    this.app.bookmarks.splice(existsIndex, 1);
+                    btnBookmark.classList.remove('is-bookmarked');
+                    this.showToast('Lesezeichen entfernt');
+                } else {
+                    this.app.bookmarks.push({ url, title });
+                    btnBookmark.classList.add('is-bookmarked');
+                    this.showToast('Lesezeichen gespeichert!');
+                }
+                localStorage.setItem('phil_bookmarks', JSON.stringify(this.app.bookmarks));
+                this.renderBookmarks();
+            };
+        }
+
+        const btnMenu = document.getElementById('btn-menu');
+        const mainMenu = document.getElementById('main-menu');
+        if(btnMenu && mainMenu) {
+            btnMenu.onclick = (e) => { 
+                e.stopPropagation(); 
+                mainMenu.classList.toggle('active'); 
+            };
+        }
+
+        document.querySelectorAll('[data-modal]').forEach(btn => {
+            btn.addEventListener('click', () => { 
+                this.showModal(btn.getAttribute('data-modal')); 
+                if(mainMenu) mainMenu.classList.remove('active'); 
+            });
+        });
+
+        document.querySelectorAll('.close-modal').forEach(btn => {
+            btn.addEventListener('click', (e) => e.target.closest('.modal-overlay').classList.remove('active'))
+        });
+
+        const historySearch = document.getElementById('history-search');
+        if(historySearch) historySearch.addEventListener('input', (e) => this.renderHistory(e.target.value));
+
         document.querySelectorAll('.app-icon-btn').forEach(btn => {
             btn.onclick = () => {
                 const sidebar = document.getElementById('sidebar');
                 const webview = document.getElementById('sidebar-webview');
+                if (!sidebar || !webview) return;
+                
                 const wasActive = btn.classList.contains('active');
                 document.querySelectorAll('.app-icon-btn').forEach(b => b.classList.remove('active'));
-                if (sidebar.classList.contains('active') && wasActive) { sidebar.classList.remove('active'); } else { btn.classList.add('active'); if (webview.src !== btn.getAttribute('data-url')) webview.src = btn.getAttribute('data-url'); sidebar.classList.add('active'); }
+                
+                if (sidebar.classList.contains('active') && wasActive) { 
+                    sidebar.classList.remove('active'); 
+                } else { 
+                    btn.classList.add('active'); 
+                    if (webview.src !== btn.getAttribute('data-url')) webview.src = btn.getAttribute('data-url'); 
+                    sidebar.classList.add('active'); 
+                }
             };
         });
-        document.getElementById('btn-reader').onclick = () => {
-            const wv = this.getActiveWebview(); if(!wv) return;
-            wv.executeJavaScript(`
-                if(window.__readerMode) { window.location.reload(); window.__readerMode = false; }
-                else {
-                    window.__readerMode = true;
-                    const article = document.querySelector('article') || document.querySelector('main') || document.body;
-                    document.body.innerHTML = '<div style="max-width:800px;margin:0 auto;padding:40px;font-family:Georgia,serif;font-size:20px;line-height:1.6;color:#e4e4e7;background:#18181b;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.5);">' + article.innerHTML + '</div>';
-                    document.body.style.background = '#0f0f13';
-                    document.querySelectorAll('img').forEach(i => { i.style.maxWidth = '100%'; i.style.height = 'auto'; });
-                }
-                null;
-            `);
-            document.getElementById('btn-reader').classList.toggle('active');
-        };
-        document.getElementById('menu-splitview').onclick = () => { this.app.tabManager.toggleSplitView(); document.getElementById('main-menu').classList.remove('active'); };
-        document.getElementById('menu-zoom-in').onclick = () => this.handleZoom(0.1);
-        document.getElementById('menu-zoom-out').onclick = () => this.handleZoom(-0.1);
+
+        const btnReader = document.getElementById('btn-reader');
+        if (btnReader) {
+            btnReader.onclick = () => {
+                const wv = this.getActiveWebview(); if(!wv) return;
+                wv.executeJavaScript(`
+                    if(window.__readerMode) { window.location.reload(); window.__readerMode = false; }
+                    else {
+                        window.__readerMode = true;
+                        const article = document.querySelector('article') || document.querySelector('main') || document.body;
+                        document.body.innerHTML = '<div style="max-width:800px;margin:0 auto;padding:40px;font-family:Georgia,serif;font-size:20px;line-height:1.6;color:#e4e4e7;background:#18181b;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.5);">' + article.innerHTML + '</div>';
+                        document.body.style.background = '#0f0f13';
+                        document.querySelectorAll('img').forEach(i => { i.style.maxWidth = '100%'; i.style.height = 'auto'; });
+                    }
+                    null;
+                `);
+                btnReader.classList.toggle('active');
+            };
+        }
+
+        const menuSplit = document.getElementById('menu-splitview');
+        if(menuSplit) menuSplit.onclick = () => { this.app.tabManager.toggleSplitView(); if(mainMenu) mainMenu.classList.remove('active'); };
         
-        // 🛑 DER GELB-KILLER FIX:
+        const zoomIn = document.getElementById('menu-zoom-in');
+        if(zoomIn) zoomIn.onclick = () => this.handleZoom(0.1);
+        
+        const zoomOut = document.getElementById('menu-zoom-out');
+        if(zoomOut) zoomOut.onclick = () => this.handleZoom(-0.1);
+        
         const findBar = document.getElementById('find-bar');
         const findInput = document.getElementById('find-input');
         
-        findInput.addEventListener('input', (e) => { 
-            if (this.app.tabManager.activeTabId) {
-                window.electronAPI.findInPage({ 
-                    tabId: this.app.tabManager.activeTabId, 
-                    text: e.target.value 
-                }); 
-            }
-        });
+        if (findInput && findBar) {
+            findInput.addEventListener('input', (e) => { 
+                if (this.app.tabManager.activeTabId) {
+                    window.electronAPI.findInPage({ 
+                        tabId: this.app.tabManager.activeTabId, 
+                        text: e.target.value 
+                    }); 
+                }
+            });
 
-        document.getElementById('find-close').onclick = () => { 
-            findBar.classList.remove('active'); 
-            const tabId = this.app.tabManager.activeTabId;
-            const tab = this.app.tabManager.tabs.get(tabId);
-            
-            if (tab) {
-                // Wir senden einen leeren String, um die Suche zu stoppen
-                window.electronAPI.findInPage({ tabId: tabId, text: '' });
-                // 'clearSelection' entfernt die gelben Highlights sofort
-                tab.webview.stopFindInPage('clearSelection');
+            const findClose = document.getElementById('find-close');
+            if(findClose) {
+                findClose.onclick = () => { 
+                    findBar.classList.remove('active'); 
+                    const tabId = this.app.tabManager.activeTabId;
+                    const tab = this.app.tabManager.tabs.get(tabId);
+                    
+                    if (tab) {
+                        window.electronAPI.findInPage({ tabId: tabId, text: '' });
+                        tab.webview.stopFindInPage('clearSelection');
+                    }
+                    findInput.value = ''; 
+                };
             }
-            findInput.value = ''; 
-        };
+        }
         
-        window.onclick = (e) => { if(!e.target.closest('.dropdown-menu') && !e.target.closest('#btn-menu')) document.getElementById('main-menu').classList.remove('active'); };
+        window.onclick = (e) => { 
+            if(mainMenu && !e.target.closest('.dropdown-menu') && !e.target.closest('#btn-menu')) {
+                mainMenu.classList.remove('active'); 
+            }
+        };
+
         window.addEventListener('keydown', (e) => {
             if(e.key === 'F8') return window.electronAPI.windowControl('min'); 
-            if(e.key === 'Escape' && findBar.classList.contains('active')) return document.getElementById('find-close').click();
-            if(e.key === 'Escape' && this.app.cmdPalette.overlay.classList.contains('active')) return this.app.cmdPalette.close();
+            if(e.key === 'Escape' && findBar && findBar.classList.contains('active')) return document.getElementById('find-close').click();
+            if(e.key === 'Escape' && this.app.cmdPalette && this.app.cmdPalette.overlay.classList.contains('active')) return this.app.cmdPalette.close();
+            
             const shorts = this.app.settings.get('shortcuts');
             const keys = []; if (e.ctrlKey) keys.push('ctrl'); if (e.shiftKey) keys.push('shift'); if (e.altKey) keys.push('alt'); keys.push(e.key.toLowerCase()); const combo = keys.join('+');
+            
             if (combo === shorts.newTab) { e.preventDefault(); this.app.tabManager.createTab(); }
             else if (combo === shorts.newPrivateTab) { e.preventDefault(); this.app.tabManager.createTab(START_PAGE, true); }
             else if (combo === shorts.closeTab) { e.preventDefault(); this.app.tabManager.closeTab(this.app.tabManager.activeTabId); }
-            else if (combo === shorts.focusUrl) { e.preventDefault(); document.getElementById('url-input').select(); }
+            else if (combo === shorts.focusUrl) { e.preventDefault(); const ui = document.getElementById('url-input'); if(ui) ui.select(); }
             else if (combo === shorts.history) { e.preventDefault(); this.showModal('history-modal'); }
-            else if (combo === shorts.find) { e.preventDefault(); findBar.classList.add('active'); findInput.focus(); findInput.select(); }
+            else if (combo === shorts.find) { e.preventDefault(); if(findBar && findInput){ findBar.classList.add('active'); findInput.focus(); findInput.select(); } }
             else if (combo === shorts.print) { e.preventDefault(); try { this.getActiveWebview()?.print(); } catch(err){} }
             else if (combo === shorts.cmdPalette) { e.preventDefault(); this.app.cmdPalette.open(); }
             else if (e.key === 'F5' || combo === 'ctrl+r') { e.preventDefault(); try { e.shiftKey ? this.getActiveWebview()?.reloadIgnoringCache() : this.getActiveWebview()?.reload(); } catch(err){} }
@@ -1013,31 +1326,40 @@ class UIManager {
     getActiveWebview() { if (!this.app.tabManager) return null; const id = this.app.tabManager.activeTabId; return id ? this.app.tabManager.tabs.get(id).webview : null; }
 
     updateNavigationState(url, webview) {
-        document.getElementById('url-input').value = (url.includes('start.html') || url.includes('offline.html')) ? '' : url;
+        const urlInput = document.getElementById('url-input');
+        if(urlInput) urlInput.value = (url.includes('start.html') || url.includes('offline.html')) ? '' : url;
         
         try {
             const activeTab = this.app.tabManager.tabs.get(this.app.tabManager.activeTabId);
+            const btnBack = document.getElementById('btn-back');
+            const btnFwd = document.getElementById('btn-forward');
+            
             if (activeTab && activeTab.isReady) {
-                document.getElementById('btn-back').disabled = !webview.canGoBack();
-                document.getElementById('btn-forward').disabled = !webview.canGoForward();
+                if(btnBack) btnBack.disabled = !webview.canGoBack();
+                if(btnFwd) btnFwd.disabled = !webview.canGoForward();
             } else {
-                document.getElementById('btn-back').disabled = true;
-                document.getElementById('btn-forward').disabled = true;
+                if(btnBack) btnBack.disabled = true;
+                if(btnFwd) btnFwd.disabled = true;
             }
-        } catch(e) {
-            document.getElementById('btn-back').disabled = true;
-            document.getElementById('btn-forward').disabled = true;
-        }
+        } catch(e) {}
         
         const secIcon = document.getElementById('security-icon');
-        const isPrivate = webview.getAttribute('partition') === 'in-memory';
-        if (isPrivate) secIcon.innerHTML = `<i class="ph ph-mask-happy" style="color:var(--private)"></i>`;
-        else if (url.includes('start.html') || url.includes('offline.html')) secIcon.innerHTML = `<i class="ph ph-house"></i>`;
-        else if (url.startsWith('https')) secIcon.innerHTML = `<i class="ph ph-lock-key text-green"></i>`;
-        else secIcon.innerHTML = `<i class="ph ph-warning-circle" style="color:var(--danger)"></i>`;
-        document.getElementById('btn-reader').classList.remove('active');
-        const isBookmarked = this.app.bookmarks.some(b => b.url === url);
-        document.getElementById('btn-bookmark').classList.toggle('is-bookmarked', isBookmarked);
+        if(secIcon) {
+            const isPrivate = webview.getAttribute('partition') === 'in-memory';
+            if (isPrivate) secIcon.innerHTML = `<i class="ph ph-mask-happy" style="color:var(--private)"></i>`;
+            else if (url.includes('start.html') || url.includes('offline.html')) secIcon.innerHTML = `<i class="ph ph-house"></i>`;
+            else if (url.startsWith('https')) secIcon.innerHTML = `<i class="ph ph-lock-key text-green"></i>`;
+            else secIcon.innerHTML = `<i class="ph ph-warning-circle" style="color:var(--danger)"></i>`;
+        }
+        
+        const btnReader = document.getElementById('btn-reader');
+        if(btnReader) btnReader.classList.remove('active');
+        
+        const btnBookmark = document.getElementById('btn-bookmark');
+        if(btnBookmark) {
+            const isBookmarked = this.app.bookmarks.some(b => b.url === url);
+            btnBookmark.classList.toggle('is-bookmarked', isBookmarked);
+        }
     }
 
     applyTheme(theme) {
@@ -1045,29 +1367,98 @@ class UIManager {
         else { document.body.className = theme === 'gaming' ? 'gaming-mode' : (theme === 'light' ? 'light-mode' : ''); }
     }
 
-    showModal(id) { document.getElementById(id).classList.add('active'); if (id === 'downloads-modal') this.renderDownloadsList(); if (id === 'history-modal') this.renderHistory(); }
+    showModal(id) { 
+        const m = document.getElementById(id);
+        if(m) m.classList.add('active'); 
+        if (id === 'downloads-modal') this.renderDownloadsList(); 
+        if (id === 'history-modal') this.renderHistory(); 
+    }
 
-    showToast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.innerHTML = `<i class="ph ph-info"></i> ${escapeHTML(msg)}`; document.getElementById('toast-container').appendChild(t); setTimeout(() => t.remove(), 4000); }
+    showToast(msg) { 
+        const t = document.createElement('div'); 
+        t.className = 'toast'; 
+        t.innerHTML = `<i class="ph ph-info"></i> ${escapeHTML(msg)}`; 
+        const tc = document.getElementById('toast-container');
+        if(tc) tc.appendChild(t); 
+        setTimeout(() => t.remove(), 4000); 
+    }
 
-    handleDownloadStart(data) { this.app.activeDownloads[data.id] = data; this.showToast(`Download gestartet: ${data.name}`); if (document.getElementById('downloads-modal').classList.contains('active')) this.renderDownloadsList(); }
+    handleDownloadStart(data) { 
+        this.app.activeDownloads[data.id] = data; 
+        this.showToast(`Download gestartet: ${data.name}`); 
+        const dlm = document.getElementById('downloads-modal');
+        if (dlm && dlm.classList.contains('active')) this.renderDownloadsList(); 
+    }
 
     handleDownloadProgress(data) {
         if (this.app.activeDownloads[data.id]) {
-            this.app.activeDownloads[data.id].received = data.received; this.app.activeDownloads[data.id].state = data.state; this.app.activeDownloads[data.id].speed = data.speed;
-            const pBar = document.getElementById(`dl-prog-${data.id}`); if (pBar && data.total > 0) pBar.style.width = `${(data.received / data.total) * 100}%`;
-            const speedEl = document.getElementById(`dl-speed-${data.id}`); if (speedEl && data.speed) speedEl.textContent = `${(data.speed / (1024*1024)).toFixed(1)} MB/s`;
+            this.app.activeDownloads[data.id].received = data.received; 
+            this.app.activeDownloads[data.id].state = data.state; 
+            this.app.activeDownloads[data.id].speed = data.speed;
+            const pBar = document.getElementById(`dl-prog-${data.id}`); 
+            if (pBar && data.total > 0) pBar.style.width = `${(data.received / data.total) * 100}%`;
+            const speedEl = document.getElementById(`dl-speed-${data.id}`); 
+            if (speedEl && data.speed) speedEl.textContent = `${(data.speed / (1024*1024)).toFixed(1)} MB/s`;
         }
     }
 
-    handleDownloadDone(data) { delete this.app.activeDownloads[data.id]; this.app.downloads.unshift(data); if(this.app.downloads.length > 50) this.app.downloads.pop(); localStorage.setItem('phil_downloads', JSON.stringify(this.app.downloads)); if (document.getElementById('downloads-modal').classList.contains('active')) this.renderDownloadsList(); this.showToast("Download abgeschlossen: " + data.name); }
+    handleDownloadDone(data) { 
+        delete this.app.activeDownloads[data.id]; 
+        this.app.downloads.unshift(data); 
+        if(this.app.downloads.length > 50) this.app.downloads.pop(); 
+        localStorage.setItem('phil_downloads', JSON.stringify(this.app.downloads)); 
+        const dlm = document.getElementById('downloads-modal');
+        if (dlm && dlm.classList.contains('active')) this.renderDownloadsList(); 
+        this.showToast("Download abgeschlossen: " + data.name); 
+    }
 
     renderDownloadsList() {
-        const list = document.getElementById('downloads-list'); list.innerHTML = ''; const activeVals = Object.values(this.app.activeDownloads);
+        const list = document.getElementById('downloads-list'); 
+        if(!list) return;
+        list.innerHTML = ''; 
+        const activeVals = Object.values(this.app.activeDownloads);
         if (activeVals.length === 0 && this.app.downloads.length === 0) { list.innerHTML = '<p style="text-align:center; color:var(--text-muted); margin-top: 20px;">Keine Downloads vorhanden.</p>'; return; }
-        const header = document.createElement('div'); header.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;"; header.innerHTML = `<span style="color:var(--text-muted); font-size:14px; font-weight:600;">Download-Verlauf</span><button class="set-btn danger" id="btn-clear-downloads" style="padding: 6px 12px; font-size: 12px;"><i class="ph ph-trash"></i> Alle leeren</button>`; list.appendChild(header);
-        header.querySelector('#btn-clear-downloads').addEventListener('click', () => { this.app.downloads = []; localStorage.setItem('phil_downloads', JSON.stringify([])); this.renderDownloadsList(); });
-        activeVals.forEach(dl => { const el = document.createElement('div'); el.className = 'dl-history-item'; el.innerHTML = `<div class="dl-history-info"><span class="dl-name"><i class="ph ph-spinner ph-spin text-green"></i> ${escapeHTML(dl.name)}</span><span class="dl-meta"><div class="dl-progress-bar-small"><div class="dl-progress-fill" id="dl-prog-${dl.id}" style="width:${(dl.received/dl.total)*100}%"></div></div>${dl.state === 'paused' ? 'Pausiert' : `<span id="dl-speed-${dl.id}">${dl.speed ? (dl.speed/(1024*1024)).toFixed(1) : 0} MB/s</span>`}</span></div><div style="display:flex; gap:5px;"><button class="set-btn" onclick="window.electronAPI.downloadAction({id:'${dl.id}', action:'${dl.state==='paused'?'resume':'pause'})}">${dl.state==='paused'?'<i class="ph ph-play"></i>':'<i class="ph ph-pause"></i>'}</button><button class="set-btn danger" onclick="window.electronAPI.downloadAction({id:'${dl.id}', action:'cancel'})"><i class="ph ph-x"></i></button></div>`; list.appendChild(el); });
-        this.app.downloads.forEach((dl, index) => { const el = document.createElement('div'); el.className = 'dl-history-item'; el.innerHTML = `<div class="dl-history-info"><span class="dl-name"><i class="ph ph-file-check ${dl.state==='completed'?'text-green':'text-muted'}"></i> ${escapeHTML(dl.name)}</span><span class="dl-meta">${(dl.size/(1024*1024)).toFixed(2)} MB • ${new Date(dl.timestamp).toLocaleString()} ${dl.state !== 'completed' ? `(${dl.state})` : ''}</span></div><div style="display:flex; gap:5px;">${dl.state === 'completed' ? `<button class="set-btn btn-open-file" data-path="${escapeHTML(dl.path)}" title="Datei öffnen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-file"></i></button>` : ''}<button class="set-btn btn-open-folder" data-path="${escapeHTML(dl.path)}" title="Ordner öffnen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-folder"></i></button><button class="set-btn danger btn-remove-dl" data-index="${index}" title="Eintrag entfernen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-x"></i></button></div>`; if (dl.state === 'completed') el.querySelector('.btn-open-file').addEventListener('click', (e) => window.electronAPI.openFile(e.currentTarget.getAttribute('data-path'))); el.querySelector('.btn-open-folder').addEventListener('click', (e) => window.electronAPI.openFolder(e.currentTarget.getAttribute('data-path'))); el.querySelector('.btn-remove-dl').addEventListener('click', (e) => { const idx = parseInt(e.currentTarget.getAttribute('data-index')); this.app.downloads.splice(idx, 1); localStorage.setItem('phil_downloads', JSON.stringify(this.app.downloads)); this.renderDownloadsList(); }); list.appendChild(el); });
+        
+        const header = document.createElement('div'); 
+        header.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;"; 
+        header.innerHTML = `<span style="color:var(--text-muted); font-size:14px; font-weight:600;">Download-Verlauf</span><button class="set-btn danger" id="btn-clear-downloads" style="padding: 6px 12px; font-size: 12px;"><i class="ph ph-trash"></i> Alle leeren</button>`; 
+        list.appendChild(header);
+        
+        const btnClear = header.querySelector('#btn-clear-downloads');
+        if(btnClear) btnClear.addEventListener('click', () => { 
+            this.app.downloads = []; 
+            localStorage.setItem('phil_downloads', JSON.stringify([])); 
+            this.renderDownloadsList(); 
+        });
+
+        activeVals.forEach(dl => { 
+            const el = document.createElement('div'); el.className = 'dl-history-item'; 
+            el.innerHTML = `<div class="dl-history-info"><span class="dl-name"><i class="ph ph-spinner ph-spin text-green"></i> ${escapeHTML(dl.name)}</span><span class="dl-meta"><div class="dl-progress-bar-small"><div class="dl-progress-fill" id="dl-prog-${dl.id}" style="width:${(dl.received/dl.total)*100}%"></div></div>${dl.state === 'paused' ? 'Pausiert' : `<span id="dl-speed-${dl.id}">${dl.speed ? (dl.speed/(1024*1024)).toFixed(1) : 0} MB/s</span>`}</span></div><div style="display:flex; gap:5px;"><button class="set-btn" onclick="window.electronAPI.downloadAction({id:'${dl.id}', action:'${dl.state==='paused'?'resume':'pause'})}">${dl.state==='paused'?'<i class="ph ph-play"></i>':'<i class="ph ph-pause"></i>'}</button><button class="set-btn danger" onclick="window.electronAPI.downloadAction({id:'${dl.id}', action:'cancel'})"><i class="ph ph-x"></i></button></div>`; 
+            list.appendChild(el); 
+        });
+
+        this.app.downloads.forEach((dl, index) => { 
+            const el = document.createElement('div'); el.className = 'dl-history-item'; 
+            el.innerHTML = `<div class="dl-history-info"><span class="dl-name"><i class="ph ph-file-check ${dl.state==='completed'?'text-green':'text-muted'}"></i> ${escapeHTML(dl.name)}</span><span class="dl-meta">${(dl.size/(1024*1024)).toFixed(2)} MB • ${new Date(dl.timestamp).toLocaleString()} ${dl.state !== 'completed' ? `(${dl.state})` : ''}</span></div><div style="display:flex; gap:5px;">${dl.state === 'completed' ? `<button class="set-btn btn-open-file" data-path="${escapeHTML(dl.path)}" title="Datei öffnen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-file"></i></button>` : ''}<button class="set-btn btn-open-folder" data-path="${escapeHTML(dl.path)}" title="Ordner öffnen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-folder"></i></button><button class="set-btn danger btn-remove-dl" data-index="${index}" title="Eintrag entfernen" style="padding:6px 10px; font-size:14px;"><i class="ph ph-x"></i></button></div>`; 
+            
+            if (dl.state === 'completed') {
+                const bof = el.querySelector('.btn-open-file');
+                if(bof) bof.addEventListener('click', (e) => window.electronAPI.openFile(e.currentTarget.getAttribute('data-path'))); 
+            }
+            
+            const bofolder = el.querySelector('.btn-open-folder');
+            if(bofolder) bofolder.addEventListener('click', (e) => window.electronAPI.openFolder(e.currentTarget.getAttribute('data-path'))); 
+            
+            const brm = el.querySelector('.btn-remove-dl');
+            if(brm) brm.addEventListener('click', (e) => { 
+                const idx = parseInt(e.currentTarget.getAttribute('data-index')); 
+                this.app.downloads.splice(idx, 1); 
+                localStorage.setItem('phil_downloads', JSON.stringify(this.app.downloads)); 
+                this.renderDownloadsList(); 
+            }); 
+            
+            list.appendChild(el); 
+        });
     }
 }
 window.onload = () => { window.browserApp = new BrowserApp(); };
