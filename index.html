@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css">
     <link rel="stylesheet" href="styles.css">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com https://unpkg.com data:; img-src 'self' data: https: http:; frame-src *; child-src * blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com https://unpkg.com data:; img-src 'self' data: blob: https: http:; frame-src *; child-src * blob:;">
 </head>
 
 <body class="dark-mode" id="app-body">
@@ -37,6 +37,7 @@
                 <button class="app-icon-btn" data-url="https://discord.com/app" title="Discord"><i class="ph ph-discord-logo"></i></button>
                 <button class="app-icon-btn" data-url="https://m.twitch.tv" title="Twitch"><i class="ph ph-twitch-logo"></i></button>
                 <button class="app-icon-btn" data-url="https://open.spotify.com" title="Spotify"><i class="ph ph-spotify-logo"></i></button>
+                <button class="app-icon-btn ai-sparkle-btn" id="btn-toggle-ai" title="Phil AI Assistant"><i class="ph ph-sparkle"></i></button>
             </div>
 
             <div class="sidebar-bottom">
@@ -45,6 +46,48 @@
                 <button class="nav-btn" id="btn-extensions" title="Erweiterungen" data-modal="extensions-modal"><i class="ph ph-puzzle-piece"></i></button>
                 <button class="nav-btn" id="btn-downloads" title="Downloads (Strg+J)" data-modal="downloads-modal"><i class="ph ph-download-simple"></i></button>
                 <button class="nav-btn" id="btn-menu" title="Menü"><i class="ph ph-list"></i></button>
+            </div>
+        </div>
+
+        <div class="ai-panel-left" id="ai-panel">
+            <div class="ai-header">
+                <div class="ai-header-title">
+                    <i class="ph ph-sparkle text-accent"></i> Phil AI
+                </div>
+                <div class="ai-header-actions">
+                    <button class="win-btn" id="btn-ai-history" title="Chat Verlauf"><i class="ph ph-clock"></i></button>
+                    <button class="win-btn" id="btn-ai-new" title="Neuer Chat"><i class="ph ph-plus"></i></button>
+                    <button class="win-btn" id="btn-close-ai" title="Schließen"><i class="ph ph-x"></i></button>
+                </div>
+            </div>
+            
+            <div class="ai-history-panel" id="ai-history-panel">
+                <div style="padding: 15px; font-weight: 600; border-bottom: 1px solid var(--border);">Deine Chats</div>
+                <div id="ai-history-list" class="ai-history-list"></div>
+            </div>
+
+            <div class="ai-chat-area" id="ai-chat-messages">
+                <div class="ai-welcome">
+                    <i class="ph ph-magic-wand"></i>
+                    <h3>Wie kann ich helfen?</h3>
+                    <p>Frag mich etwas, lass mich Seiten zusammenfassen oder lade Bilder hoch!</p>
+                </div>
+            </div>
+
+            <div class="ai-input-wrapper">
+                <div id="ai-upload-preview" class="ai-upload-preview"></div>
+                <div class="ai-input-box">
+                    <label for="ai-file-upload" class="ai-action-btn" title="Bild hochladen">
+                        <i class="ph ph-paperclip"></i>
+                        <input type="file" id="ai-file-upload" accept="image/*" hidden>
+                    </label>
+                    <textarea id="ai-chat-input" placeholder="Frag die KI (Deep Search aktiv)..." rows="1"></textarea>
+                    <button class="ai-send-btn" id="btn-ai-send"><i class="ph ph-paper-plane-right"></i></button>
+                </div>
+                <div class="ai-footer-info">
+                    <span id="ai-model-info"><i class="ph ph-globe"></i> Online & Bereit</span>
+                    <span id="ai-chat-counter">0/20</span>
+                </div>
             </div>
         </div>
 
@@ -222,14 +265,6 @@
             <div class="modal-header">
                 <h2>🧩 Erweiterungen</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
             <div class="modal-body" id="extensions-list" style="padding: 20px; display: flex; flex-direction: column; gap: 10px;"></div>
-        </div>
-    </div>
-
-    <div class="modal-overlay" id="ai-modal">
-        <div class="modal-content" style="max-width: 600px; height: auto;">
-            <div class="modal-header">
-                <h2>✨ AI Assistent</h2><button class="win-btn close-modal"><i class="ph ph-x"></i></button></div>
-            <div class="modal-body" id="ai-content" style="line-height: 1.6; padding: 20px;">Lädt...</div>
         </div>
     </div>
 

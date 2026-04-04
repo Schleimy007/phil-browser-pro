@@ -54,6 +54,432 @@ function recordTabVisit(url, title) {
     localStorage.setItem('ai_tab_memory', JSON.stringify(memory.slice(0, 20)));
 }
 
+// --- AIManager KLASSE ---
+class AIManager {
+    constructor(app) {
+        this.app = app;
+        this.panel = document.getElementById('ai-panel');
+        this.chatMessages = document.getElementById('ai-chat-messages');
+        this.chatInput = document.getElementById('ai-chat-input');
+        this.btnSend = document.getElementById('btn-ai-send');
+        this.btnToggle = document.getElementById('btn-toggle-ai');
+        this.btnClose = document.getElementById('btn-close-ai');
+        this.btnHistory = document.getElementById('btn-ai-history');
+        this.btnNew = document.getElementById('btn-ai-new');
+        this.historyPanel = document.getElementById('ai-history-panel');
+        this.historyList = document.getElementById('ai-history-list');
+        this.uploadInput = document.getElementById('ai-file-upload');
+        this.uploadPreview = document.getElementById('ai-upload-preview');
+
+        this.sessions = JSON.parse(localStorage.getItem('phil_ai_sessions')) || [];
+        this.currentSessionId = null;
+        this.currentChatHistory = [];
+        this.pendingImageBase64 = null;
+
+        this.sysInstr = `Du bist Phil AI, der smarte und hilfreiche KI-Assistent des "Phil Browser Pro".
+        
+WICHTIGE REGELN FÜR DICH:
+1. Dein Erschaffer ist Schleimy. Er ist 14 Jahre alt, der Manager vom bekannten YouTuber Phil3663 und ein leidenschaftlicher Web- und App-Entwickler.
+2. Du antwortest IMMER auf Deutsch und bist freundlich.
+3. Nutze für Fragen IMMER zuerst dein Internet-Suchtool (Deep Search), wenn du aktuelle Fakten brauchst.
+4. ZWINGEND ERFORDERLICH: Deine Antwort MUSS immer aus zwei Teilen bestehen! Erst das Denken in <think> Tags, dann das Reden!
+
+BEISPIEL WIE DEINE ANTWORT STRUKTURIERT SEIN MUSS:
+<think>
+Hier stehen meine schlauen Gedanken und Überlegungen...
+</think>
+Hier steht meine finale, echte Antwort an den Nutzer!
+
+HÖRE NIEMALS NACH DEM </think> TAG AUF ZU SCHREIBEN! Die Antwort nach dem Denken ist das Wichtigste!`;
+
+        this.init();
+    }
+
+    init() {
+        if(this.btnToggle) this.btnToggle.addEventListener('click', () => this.togglePanel());
+        if(this.btnClose) this.btnClose.addEventListener('click', () => this.panel.classList.remove('active'));
+        if(this.btnHistory) this.btnHistory.addEventListener('click', () => this.historyPanel.classList.toggle('active'));
+        if(this.btnNew) this.btnNew.addEventListener('click', () => this.startNewSession());
+        
+        if(this.btnSend) this.btnSend.addEventListener('click', () => this.handleSend());
+        if(this.chatInput) {
+            this.chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.handleSend(); }
+            });
+            this.chatInput.addEventListener('input', () => {
+                this.chatInput.style.height = 'auto';
+                this.chatInput.style.height = (this.chatInput.scrollHeight) + 'px';
+            });
+        }
+
+        if(this.uploadInput) {
+            this.uploadInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if(file) this.handleFileUpload(file);
+            });
+        }
+
+        if (this.historyList) {
+            this.historyList.addEventListener('click', (e) => {
+                const item = e.target.closest('.ai-history-item');
+                if (!item) return;
+
+                const sessionId = item.getAttribute('data-id');
+
+                if (e.target.closest('.btn-delete-chat')) {
+                    e.stopPropagation();
+                    this.deleteSession(sessionId);
+                    return;
+                }
+
+                if (e.target.closest('.btn-rename-chat')) {
+                    e.stopPropagation();
+                    this.renameSession(sessionId);
+                    return;
+                }
+
+                this.loadSession(sessionId);
+            });
+        }
+
+        this.renderHistoryList();
+        if(this.sessions.length > 0) this.loadSession(this.sessions[0].id);
+        else this.startNewSession();
+        this.updateCounter();
+    }
+
+    checkAILimit() {
+        const today = new Date().toDateString();
+        let usage = JSON.parse(localStorage.getItem('phil_ai_usage')) || { date: today, count: 0 };
+        
+        if (usage.date !== today) { usage = { date: today, count: 0 }; }
+        
+        if (usage.count >= 50) {
+            if(window.browserApp) window.browserApp.ui.showToast("Tägliches KI-Limit von 50 Anfragen erreicht! Morgen geht's weiter. 🛑");
+            return false;
+        }
+        
+        usage.count++;
+        localStorage.setItem('phil_ai_usage', JSON.stringify(usage));
+        this.updateCounter();
+        return true;
+    }
+
+    togglePanel() {
+        this.panel.classList.toggle('active');
+        if(this.panel.classList.contains('active')) {
+            setTimeout(() => this.chatInput.focus(), 300);
+        }
+    }
+
+    openWithContext(task, textOrUrl, isImage = false, base64Data = null) {
+        if(!this.panel.classList.contains('active')) this.togglePanel();
+        
+        this.startNewSession();
+        
+        if(isImage && base64Data) {
+            this.pendingImageBase64 = base64Data;
+            this.chatInput.value = task;
+            this.uploadPreview.innerHTML = `<div class="preview-item"><img src="${base64Data}"><button id="btn-clear-upload"><i class="ph ph-x"></i></button></div>`;
+            this.uploadPreview.style.display = 'flex';
+            
+            const btnClear = document.getElementById('btn-clear-upload');
+            if(btnClear) btnClear.addEventListener('click', () => this.clearUpload());
+        } else {
+            this.chatInput.value = `${task}\n\n"${textOrUrl}"`;
+        }
+        
+        setTimeout(() => this.handleSend(), 50);
+    }
+
+    handleFileUpload(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            this.pendingImageBase64 = e.target.result;
+            this.uploadPreview.innerHTML = `<div class="preview-item"><img src="${this.pendingImageBase64}"><button id="btn-clear-upload"><i class="ph ph-x"></i></button></div>`;
+            this.uploadPreview.style.display = 'flex';
+            
+            const btnClear = document.getElementById('btn-clear-upload');
+            if(btnClear) btnClear.addEventListener('click', () => this.clearUpload());
+        };
+        reader.readAsDataURL(file);
+    }
+
+    clearUpload() {
+        this.pendingImageBase64 = null;
+        this.uploadPreview.innerHTML = '';
+        this.uploadPreview.style.display = 'none';
+        this.uploadInput.value = '';
+    }
+
+    startNewSession() {
+        this.currentSessionId = Date.now().toString();
+        this.currentChatHistory = [{ role: 'system', content: this.sysInstr }];
+        this.chatMessages.innerHTML = `
+            <div class="ai-welcome">
+                <i class="ph ph-sparkle" style="font-size:32px; color:var(--accent);"></i>
+                <h3 style="margin:10px 0;">Neuer Chat</h3>
+                <p style="color:var(--text-muted); font-size:13px;">Frag mich etwas oder lade ein Bild hoch!</p>
+            </div>
+        `;
+        this.historyPanel.classList.remove('active');
+        this.renderHistoryList();
+    }
+
+    saveSession() {
+        let sessionIndex = this.sessions.findIndex(s => s.id === this.currentSessionId);
+        let title = "Neuer Chat";
+        let isCustomTitle = false;
+
+        if (sessionIndex >= 0 && this.sessions[sessionIndex].isCustomTitle) {
+            title = this.sessions[sessionIndex].title;
+            isCustomTitle = true;
+        } else if(this.currentChatHistory.length > 1) {
+            const firstUserMsg = this.currentChatHistory.find(m => m.role === 'user');
+            if(firstUserMsg) {
+                if(typeof firstUserMsg.content === 'string') title = firstUserMsg.content.substring(0, 30) + "...";
+                else title = "Bildanalyse...";
+            }
+        }
+
+        const sessionData = {
+            id: this.currentSessionId,
+            title: title,
+            isCustomTitle: isCustomTitle,
+            date: Date.now(),
+            history: this.currentChatHistory
+        };
+
+        if(sessionIndex >= 0) this.sessions[sessionIndex] = sessionData;
+        else this.sessions.unshift(sessionData);
+
+        if(this.sessions.length > 20) this.sessions.pop();
+        localStorage.setItem('phil_ai_sessions', JSON.stringify(this.sessions));
+        this.renderHistoryList();
+    }
+
+    loadSession(id) {
+        const session = this.sessions.find(s => s.id === id);
+        if(!session) return;
+        this.currentSessionId = session.id;
+        this.currentChatHistory = session.history;
+        
+        this.chatMessages.innerHTML = '';
+        this.currentChatHistory.forEach(msg => {
+            if(msg.role === 'system') return;
+            if(msg.role === 'user') {
+                let contentHTML = '';
+                if(typeof msg.content === 'string') contentHTML = escapeHTML(msg.content);
+                else {
+                    const textPart = msg.content.find(p => p.type === 'text')?.text || '';
+                    const imgPart = msg.content.find(p => p.type === 'image_url')?.image_url?.url || '';
+                    contentHTML = `${escapeHTML(textPart)}<br><img src="${imgPart}" style="max-width:150px; border-radius:8px; margin-top:5px;">`;
+                }
+                this.appendMessage('user', contentHTML);
+            } else {
+                this.appendMessage('assistant', this.parseAIResponse(msg.content, null));
+            }
+        });
+        this.historyPanel.classList.remove('active');
+        this.renderHistoryList();
+    }
+
+    renameSession(id) {
+        const session = this.sessions.find(s => s.id === id);
+        if(!session) return;
+        
+        const newTitle = prompt("Wie soll dieser Chat heißen?", session.title);
+        
+        if(newTitle && newTitle.trim().length > 0) {
+            session.title = newTitle.trim();
+            session.isCustomTitle = true; 
+            localStorage.setItem('phil_ai_sessions', JSON.stringify(this.sessions));
+            this.renderHistoryList();
+        }
+    }
+
+    deleteSession(id) {
+        this.sessions = this.sessions.filter(s => s.id !== id);
+        localStorage.setItem('phil_ai_sessions', JSON.stringify(this.sessions));
+        if(this.currentSessionId === id) this.startNewSession();
+        this.renderHistoryList();
+    }
+
+    renderHistoryList() {
+        if(!this.historyList) return;
+        
+        this.historyList.innerHTML = this.sessions.map(s => `
+            <div class="ai-history-item" data-id="${s.id}" style="${s.id === this.currentSessionId ? 'border-color:var(--accent); background:rgba(99, 102, 241, 0.05);' : ''}">
+                <i class="ph ph-chat-teardrop"></i>
+                <div class="chat-title-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHTML(s.title)}</div>
+                <div style="display:flex; gap:4px; align-items:center;">
+                    <button class="win-btn btn-rename-chat" title="Umbenennen" style="width:24px; height:24px; font-size:12px; color:var(--text-muted);"><i class="ph ph-pencil-simple"></i></button>
+                    <button class="win-btn btn-delete-chat" title="Löschen" style="width:24px; height:24px; font-size:12px; color:var(--danger);"><i class="ph ph-trash"></i></button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    appendMessage(role, htmlContent) {
+        const msg = document.createElement('div');
+        msg.className = `ai-message ${role === 'user' ? 'ai-user' : 'ai-model'}`;
+        msg.innerHTML = htmlContent;
+        this.chatMessages.appendChild(msg);
+        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+
+        const details = msg.querySelectorAll('details.ai-thought');
+        details.forEach(d => {
+            d.addEventListener('toggle', (e) => {
+                if(d.open) {
+                    const content = d.querySelector('.ai-thought-content');
+                    content.style.animation = 'slideDown 0.3s ease-out';
+                }
+            });
+        });
+    }
+
+    parseAIResponse(text, sources) {
+        let finalHtml = '';
+        let answerText = text;
+        
+        const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/i);
+        if(thinkMatch) {
+            const thinkContent = formatAIResponse(thinkMatch[1].trim());
+            finalHtml += `
+                <details class="ai-thought">
+                    <summary><i class="ph ph-brain"></i> Gedankenprozess anzeigen</summary>
+                    <div class="ai-thought-content">${thinkContent}</div>
+                </details>
+            `;
+            answerText = text.replace(/<think>[\s\S]*?<\/think>/i, '').trim();
+        }
+
+        if (answerText === '') {
+            answerText = "*(Ich habe nachgedacht, aber vergessen, die eigentliche Antwort aufzuschreiben. Frag mich gerne nochmal!)*";
+        }
+
+        if (sources && sources.length > 0) {
+             const uniqueSources = [];
+             const seenUrls = new Set();
+             sources.forEach(s => { if(!seenUrls.has(s.url)) { seenUrls.add(s.url); uniqueSources.push(s); } });
+             finalHtml += `
+                 <details class="ai-sources-details" style="margin-bottom:10px;">
+                     <summary><i class="ph ph-globe-hemisphere-west"></i> Web-Quellen (${uniqueSources.length})</summary>
+                     <div class="ai-sources-list">
+                         ${uniqueSources.map(s => `
+                             <a href="#" class="ai-source-item" title="${escapeHTML(s.title)}" onclick="window.browserApp.tabManager.createTab('${escapeHTML(s.url)}'); return false;">
+                                 <img src="https://www.google.com/s2/favicons?domain=${new URL(s.url).hostname}&sz=32" alt="icon">
+                                 <span>${escapeHTML(s.title)}</span>
+                             </a>
+                         `).join('')}
+                     </div>
+                 </details>
+             `;
+         }
+
+         finalHtml += `<div class="ai-text-content">${formatAIResponse(answerText)}</div>`;
+         return finalHtml;
+    }
+
+    async handleSend() {
+        const text = this.chatInput.value.trim();
+        const hasImage = this.pendingImageBase64 !== null;
+
+        if (!text && !hasImage) return;
+        if (!this.checkAILimit()) return;
+
+        if(document.querySelector('.ai-welcome')) document.querySelector('.ai-welcome').remove();
+
+        this.chatInput.value = '';
+        this.chatInput.style.height = 'auto';
+
+        let userMsgContent = text;
+        let displayHtml = escapeHTML(text);
+
+        if(hasImage) {
+            userMsgContent = [
+                { type: 'text', text: text || 'Was siehst du auf dem Bild?' },
+                { type: 'image_url', image_url: { url: this.pendingImageBase64 } }
+            ];
+            displayHtml = `${escapeHTML(text)}<br><img src="${this.pendingImageBase64}" style="max-width:150px; border-radius:8px; margin-top:5px;">`;
+        }
+
+        this.appendMessage('user', displayHtml);
+        this.currentChatHistory.push({ role: 'user', content: userMsgContent });
+        
+        const loadingId = 'loading-' + Date.now();
+        this.appendMessage('assistant', `<span id="${loadingId}" class="ai-thinking-indicator"><i class="ph ph-circle-notch ph-spin text-accent"></i> KI denkt nach...</span>`);
+        
+        this.chatInput.disabled = true;
+        this.btnSend.disabled = true;
+
+        try {
+            const result = await window.electronAPI.fetchAI(this.currentChatHistory);
+            document.getElementById(loadingId)?.parentElement?.remove();
+
+            if (!result.success) {
+                 this.appendMessage('assistant', `<span style="color:var(--danger);">🚨 ${escapeHTML(result.error)}</span>`);
+            } else {
+                 this.currentChatHistory.push({ role: 'assistant', content: result.text });
+                 
+                 const msgId = 'msg-' + Date.now();
+                 this.appendMessage('assistant', `<div id="${msgId}"><div class="typewriter-content"></div></div>`);
+                 const contentDiv = document.getElementById(msgId).querySelector('.typewriter-content');
+                 
+                 const fullHTML = this.parseAIResponse(result.text, result.sources);
+                 
+                 let i = 0;
+                 let isTag = false;
+                 let currentHTML = '';
+                 
+                 const typeWriter = () => {
+                     if (i < fullHTML.length) {
+                         if (fullHTML.charAt(i) === '<') isTag = true;
+                         currentHTML += fullHTML.charAt(i);
+                         i++;
+                         if (isTag) {
+                             while(i < fullHTML.length && fullHTML.charAt(i-1) !== '>') {
+                                 currentHTML += fullHTML.charAt(i);
+                                 i++;
+                             }
+                             isTag = false;
+                         }
+                         contentDiv.innerHTML = currentHTML;
+                         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+                         setTimeout(typeWriter, 5);
+                     } else {
+                         if(result.usedModel) {
+                             const mi = document.getElementById('ai-model-info');
+                             if(mi) mi.innerHTML = `<i class="ph ph-cpu"></i> ${escapeHTML(result.usedModel)}`;
+                         }
+                         this.saveSession();
+                     }
+                 };
+                 typeWriter();
+            }
+        } catch (err) {
+            document.getElementById(loadingId)?.parentElement?.remove();
+            this.appendMessage('assistant', `<span style="color:var(--danger);">🚨 Systemfehler: ${escapeHTML(err.message)}</span>`);
+        }
+
+        this.chatInput.disabled = false;
+        this.btnSend.disabled = false;
+        this.clearUpload();
+        setTimeout(() => this.chatInput.focus(), 100);
+    }
+
+    updateCounter() {
+        const today = new Date().toDateString();
+        let usage = JSON.parse(localStorage.getItem('phil_ai_usage'));
+        let count = 0;
+        if (usage && usage.date === today) {
+            count = usage.count;
+        }
+        const counter = document.getElementById('ai-chat-counter');
+        if(counter) counter.textContent = `${count}/50 Anfragen heute`;
+    }
+}
+
 class BrowserApp {
     constructor() {
         this.settings = new SettingsManager();
@@ -66,13 +492,12 @@ class BrowserApp {
         this.bookmarks = JSON.parse(localStorage.getItem('phil_bookmarks')) || [];
         this.activeDownloads = {};
         
-        this.currentChatHistory = [];
-        this.currentChatUses = 0;
-
         this.tabManager = null;
         this.ui = new UIManager(this);
         this.omnibox = new OmniboxController(this);
         this.cmdPalette = new CommandPalette(this);
+        
+        this.ai = new AIManager(this); 
 
         this.init();
 
@@ -88,7 +513,6 @@ class BrowserApp {
 
         const appPath = await window.electronAPI.getAppPath();
         this.appPath = appPath;
-        window.IS_DRM_ENABLED = await window.electronAPI.getDRMState(); 
 
         const fileArgUrl = await window.electronAPI.getStartArgs();
         let customStart = this.settings.get('startPage');
@@ -120,19 +544,6 @@ class BrowserApp {
         }, 5000);
     }
 
-    checkAILimit() {
-        const today = new Date().toDateString();
-        let usage = JSON.parse(localStorage.getItem('phil_ai_usage')) || { date: today, count: 0 };
-        if (usage.date !== today) usage = { date: today, count: 0 };
-        if (usage.count >= 150) {
-            sendNotification("KI Limit", "Du hast heute bereits 150 KI-Anfragen gestellt.");
-            return false;
-        }
-        usage.count++;
-        localStorage.setItem('phil_ai_usage', JSON.stringify(usage));
-        return usage.count;
-    }
-
     setupIPC() {
         window.electronAPI.onUpdateAvailable((version) => {
             const modal = document.getElementById('update-modal');
@@ -155,212 +566,17 @@ class BrowserApp {
         window.electronAPI.onDownloadProgress((data) => this.ui.handleDownloadProgress(data));
         window.electronAPI.onDownloadDone((data) => this.ui.handleDownloadDone(data));
 
-        // --- KI INTERFACE (MIT DEEP SEARCH UI & TYPEWRITER EFFEKT) ---
         window.electronAPI.onAIAction(async(data) => {
-            this.ui.showModal('ai-modal');
-            const aiContent = document.getElementById('ai-content');
-            if (!aiContent) return;
-            
-            const usageCount = this.checkAILimit();
-            if (!usageCount) {
-                aiContent.innerHTML = `<div style="color:var(--danger); padding:20px;">🚨 Daily Limit erreicht! Komm morgen wieder (Max. 150 Anfragen/Tag).</div>`;
-                return;
-            }
-
-            this.currentChatUses = 1;
-            this.currentChatHistory = [
-                { role: 'system', content: 'Du bist der intelligente Assistent des Phil Browser Pro. Du antwortest immer auf Deutsch. WICHTIG: Wenn du zu einer Person, einem Ereignis oder Begriff keine topaktuellen Daten hast, MUSST du zwingend das Internet durchsuchen (Deep Search). Wenn du es nicht weißt, suche!' }
-            ];
-
-            let initialDisplayHTML = '';
-
-            aiContent.innerHTML = `
-                <div id="chat-messages" style="height: 350px; overflow-y: auto; padding-right: 10px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px;">
-                </div>
-                <div style="display: flex; gap: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; align-items: center;">
-                    <input type="text" id="chat-input" placeholder="Frag etwas dazu..." style="flex: 1; padding: 12px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.4); color: white; font-family: inherit; outline: none; transition: 0.2s;">
-                    <button id="chat-send" class="win-btn" style="width: 42px; height: 42px; min-width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; background: #6366f1; color: white; border-radius: 50%; font-size: 20px; cursor: pointer; border: none;">
-                        <i class="ph ph-paper-plane-right" style="margin-left: 2px;"></i>
-                    </button>
-                </div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; justify-content: space-between;">
-                    <span id="ai-model-info"><i class="ph ph-spinner ph-spin"></i> Verbinde zu KI...</span>
-                    <span id="chat-counter">${this.currentChatUses}/20 Nachrichten</span>
-                </div>
-                <style>
-                    #chat-input:focus { border-color: #6366f1 !important; }
-                    #chat-send:hover { background: #4f46e5 !important; transform: scale(1.05); }
-                    .chat-bubble { padding: 12px 16px; border-radius: 12px; max-width: 90%; line-height: 1.6; }
-                    .chat-user { background: #6366f1; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
-                    .chat-ai { background: rgba(255,255,255,0.05); color: var(--text-main); align-self: flex-start; border-left: 3px solid #10b981; border-bottom-left-radius: 2px; }
-                </style>
-            `;
-
-            const chatMessages = document.getElementById('chat-messages');
-            const chatInput = document.getElementById('chat-input');
-            const chatSend = document.getElementById('chat-send');
-            const chatCounter = document.getElementById('chat-counter');
-
-            const appendMessage = (role, htmlContent) => {
-                if (!chatMessages) return;
-                const msg = document.createElement('div');
-                msg.className = `chat-bubble ${role === 'user' ? 'chat-user' : 'chat-ai'}`;
-                msg.innerHTML = htmlContent;
-                chatMessages.appendChild(msg);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            };
-
-            const triggerAI = async () => {
-                const loadingId = 'loading-' + Date.now();
-                appendMessage('assistant', `<span id="${loadingId}"><i class="ph ph-spinner ph-spin text-green"></i> KI denkt nach...</span>`);
-                if (chatInput) chatInput.disabled = true; 
-                if (chatSend) chatSend.disabled = true;
-
-                try {
-                    const result = await window.electronAPI.fetchAI(this.currentChatHistory);
-                    
-                    const loadingEl = document.getElementById(loadingId);
-                    if (loadingEl) loadingEl.parentElement.remove();
-
-                    if (!result.success) {
-                         appendMessage('assistant', `<span style="color:var(--danger);">🚨 API Fehler: ${escapeHTML(result.error)}</span>`);
-                         if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
-                         if (chatSend) chatSend.disabled = false;
-                    } else {
-                         this.currentChatHistory.push({ role: 'assistant', content: result.text });
-                         
-                         const msgId = 'msg-' + Date.now();
-                         let sourcesHtml = '';
-                         
-                         // Wenn die KI gegoogelt hat, die Sources-Dropdown-Box bauen
-                         if (result.sources && result.sources.length > 0) {
-                             const uniqueSources = [];
-                             const seenUrls = new Set();
-                             result.sources.forEach(s => {
-                                 if(!seenUrls.has(s.url)) { seenUrls.add(s.url); uniqueSources.push(s); }
-                             });
-                             sourcesHtml = `
-                                 <details class="ai-sources-details">
-                                     <summary><i class="ph ph-globe-hemisphere-west"></i> Im Web gesucht (${uniqueSources.length} Quellen)</summary>
-                                     <div class="ai-sources-list">
-                                         ${uniqueSources.map(s => `
-                                             <a href="#" class="ai-source-item" title="${escapeHTML(s.title)}" onclick="window.browserApp.tabManager.createTab('${escapeHTML(s.url)}'); return false;">
-                                                 <img src="https://www.google.com/s2/favicons?domain=${new URL(s.url).hostname}&sz=32" alt="icon">
-                                                 <span>${escapeHTML(s.title)}</span>
-                                             </a>
-                                         `).join('')}
-                                     </div>
-                                 </details>
-                             `;
-                         }
-                         
-                         appendMessage('assistant', `<div id="${msgId}">${sourcesHtml}<div class="typewriter-content"></div></div>`);
-                         const contentDiv = document.getElementById(msgId).querySelector('.typewriter-content');
-                         
-                         const formattedText = formatAIResponse(result.text);
-                         let i = 0;
-                         let isTag = false;
-                         let currentHTML = '';
-                         
-                         // Typewriter Effekt (wie bei mir)
-                         const typeWriter = () => {
-                             if (i < formattedText.length) {
-                                 if (formattedText.charAt(i) === '<') isTag = true;
-                                 currentHTML += formattedText.charAt(i);
-                                 i++;
-                                 if (isTag) {
-                                     while(i < formattedText.length && formattedText.charAt(i-1) !== '>') {
-                                         currentHTML += formattedText.charAt(i);
-                                         i++;
-                                     }
-                                     isTag = false;
-                                 }
-                                 contentDiv.innerHTML = currentHTML;
-                                 chatMessages.scrollTop = chatMessages.scrollHeight;
-                                 setTimeout(typeWriter, Math.floor(Math.random() * 10) + 5);
-                             } else {
-                                 if(result.usedModel) {
-                                     const mi = document.getElementById('ai-model-info');
-                                     if(mi) mi.innerHTML = `<i class="ph ph-cpu"></i> Läuft auf: ${escapeHTML(result.usedModel)}`;
-                                 }
-                                 if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
-                                 if (chatSend) chatSend.disabled = false;
-                             }
-                         };
-                         typeWriter();
-                    }
-                } catch (err) {
-                    const loadingEl = document.getElementById(loadingId);
-                    if (loadingEl) loadingEl.parentElement.remove();
-                    appendMessage('assistant', `<span style="color:var(--danger);">🚨 Systemfehler: ${escapeHTML(err.message)}</span>`);
-                    if (chatInput) { chatInput.disabled = false; chatInput.focus(); }
-                    if (chatSend) chatSend.disabled = false;
-                }
-            };
-
             if (data.type === 'image') {
-                const aiModelInfo = document.getElementById('ai-model-info');
-                if (aiModelInfo) aiModelInfo.innerHTML = '<i class="ph ph-image"></i> Bild-Modus';
-
-                initialDisplayHTML = `<strong>${escapeHTML(data.task)}</strong><br><img src="${data.url}" style="max-height: 100px; border-radius: 8px; margin-top: 10px;">`;
-                appendMessage('user', initialDisplayHTML);
-                
-                const loadingId = 'loading-img-' + Date.now();
-                appendMessage('assistant', `<span id="${loadingId}"><i class="ph ph-spinner ph-spin text-green"></i> Mache Screenshot...</span>`);
-                
                 const base64Data = await window.electronAPI.fetchImage({ x: data.x, y: data.y });
-                const loadingEl = document.getElementById(loadingId);
-                if (loadingEl) loadingEl.parentElement.remove();
-
-                if (!base64Data) {
-                    appendMessage('assistant', `<span style="color:var(--danger);">🚨 Fehler: Konnte den Bereich nicht scannen.</span>`);
-                    return;
+                if(base64Data) {
+                    this.ai.openWithContext(data.task, '', true, base64Data);
+                } else {
+                    this.ui.showToast('Fehler beim Scannen des Bildes.');
                 }
-
-                this.currentChatHistory.push({
-                    role: 'user',
-                    content: [
-                        { type: 'text', text: data.task },
-                        { type: 'image_url', image_url: { url: base64Data } }
-                    ]
-                });
-                await triggerAI();
             } else {
-                const aiModelInfo = document.getElementById('ai-model-info');
-                if(aiModelInfo) aiModelInfo.innerHTML = '<i class="ph ph-magnifying-glass"></i> Deep Search bereit';
-                
-                initialDisplayHTML = `<strong>Aktion:</strong> ${escapeHTML(data.task)}<br><i>"${escapeHTML(data.text).substring(0,200)}..."</i>`;
-                appendMessage('user', initialDisplayHTML);
-                
-                this.currentChatHistory.push({ role: 'user', content: `${data.task}\n\n${data.text}` });
-                await triggerAI();
+                this.ai.openWithContext(data.task, data.text);
             }
-
-            const handleSend = async () => {
-                if (!chatInput) return;
-                const text = chatInput.value.trim();
-                if (!text) return;
-                
-                if (this.currentChatUses >= 20) {
-                    appendMessage('assistant', `<span style="color:var(--danger);">Limit von 20 Nachrichten erreicht. Bitte starte einen neuen Chat!</span>`);
-                    chatInput.disabled = true;
-                    return;
-                }
-
-                chatInput.value = '';
-                this.currentChatUses++;
-                if (chatCounter) chatCounter.textContent = `${this.currentChatUses}/20 Nachrichten`;
-
-                appendMessage('user', escapeHTML(text));
-                this.currentChatHistory.push({ role: 'user', content: text });
-                await triggerAI();
-            };
-
-            if (chatSend) chatSend.addEventListener('click', handleSend);
-            if (chatInput) chatInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') handleSend();
-            });
-            setTimeout(() => { if(chatInput) chatInput.focus(); }, 100);
         });
 
         window.electronAPI.onTabAction((data) => {
@@ -461,13 +677,10 @@ class TabManager {
         webview.id = `view-${id}`;
         webview.src = lazy ? 'about:blank' : url;
         webview.setAttribute('allowpopups', '');
-        
-        if (window.IS_DRM_ENABLED) {
-            webview.setAttribute('plugins', ''); 
-            webview.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-        }
-
         webview.setAttribute('partition', isPrivate ? 'in-memory' : 'persist:session');
+        // Safari Tarnung für das Frontend
+        webview.setAttribute('useragent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15');
+
         const workspace = document.getElementById('workspace');
         if (workspace) workspace.appendChild(webview);
 
@@ -895,35 +1108,6 @@ class UIManager {
         this.app = app;
         this.setupEventListeners();
         this.initNotes();
-        this.injectDRMToggle(); 
-    }
-
-    injectDRMToggle() {
-        setTimeout(() => {
-            const settingsBody = document.querySelector('#settings-modal .modal-body');
-            if (settingsBody && !document.getElementById('toggle-drm')) {
-                const drmHtml = `
-                <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                    <div style="flex: 1;">
-                        <strong style="display: block; margin-bottom: 4px;">🎬 Netflix / DRM Modus</strong>
-                        <div style="font-size: 12px; color: var(--text-muted);">Aktiviert Kopierschutz (Browser startet neu!)</div>
-                    </div>
-                    <label class="switch" style="margin: 0; flex-shrink: 0;">
-                        <input type="checkbox" id="toggle-drm" ${window.IS_DRM_ENABLED ? 'checked' : ''}>
-                        <span class="slider round"></span>
-                    </label>
-                </div>`;
-                settingsBody.insertAdjacentHTML('beforeend', drmHtml);
-
-                const btnDrm = document.getElementById('toggle-drm');
-                if (btnDrm) {
-                    btnDrm.addEventListener('change', async (e) => {
-                        const enable = e.target.checked;
-                        await window.electronAPI.setDRMState(enable);
-                    });
-                }
-            }
-        }, 500);
     }
 
     showPasswordPrompt(domain, username, password) {
@@ -1216,6 +1400,7 @@ class UIManager {
         if(historySearch) historySearch.addEventListener('input', (e) => this.renderHistory(e.target.value));
 
         document.querySelectorAll('.app-icon-btn').forEach(btn => {
+            if(btn.id === 'btn-toggle-ai') return;
             btn.onclick = () => {
                 const sidebar = document.getElementById('sidebar');
                 const webview = document.getElementById('sidebar-webview');

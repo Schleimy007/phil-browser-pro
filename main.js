@@ -4,29 +4,18 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 
-// --- WICHTIG: Pfade setzen BEVOR app ready ist, um Background-Crash zu vermeiden ---
 const userDataPath = path.join(app.getPath('appData'), 'phil-browser-data');
 app.setPath('userData', userDataPath);
 
-const drmConfigPath = path.join(userDataPath, 'drm_config.json');
-let drmEnabled = false;
-try {
-    if (fs.existsSync(drmConfigPath)) {
-        drmEnabled = JSON.parse(fs.readFileSync(drmConfigPath, 'utf8')).enabled;
-    }
-} catch(e) {}
-
-// --- FIX 1: Verhindert das nervige Windows Passkey (WebAuthn) Popup komplett ---
-app.commandLine.appendSwitch('disable-features', 'WebAuthentication,WebAuthenticationUI');
-
-// Performance Flags
+app.commandLine.appendSwitch('disable-features', 'WebAuthentication,WebAuthenticationUI,IsolateOrigins,site-per-process');
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
 
-// --- FIX 2: Absolut kugelsicherer Chrome User-Agent für Google Login ---
-const CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-app.userAgentFallback = CHROME_USER_AGENT;
+// --- DER ULTIMATIVE SAFARI-MAC BYPASS FÜR GOOGLE LOGIN ---
+const SAFARI_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+app.userAgentFallback = SAFARI_UA;
 
 if (process.defaultApp) {
     if (process.argv.length >= 2) {
@@ -74,34 +63,35 @@ if (!gotTheLock) {
                 nodeIntegration: false,
                 contextIsolation: true,
                 webviewTag: true, 
-                plugins: drmEnabled,
                 webSecurity: false, 
                 preload: path.join(__dirname, 'preload.js')
             }
         });
 
-        // --- TIEFER SESSION FIX (Google Login & Popups) ---
         const sessionsToFix = [
             session.defaultSession, 
             session.fromPartition('in-memory'), 
-            session.fromPartition('persist:session')
+            session.fromPartition('persist:session'),
+            session.fromPartition('persist:sidebar')
         ];
         
         sessionsToFix.forEach(sess => {
             sess.setPermissionRequestHandler((webContents, permission, callback) => {
-                if (permission === 'security-key') {
-                    return callback(false); 
-                }
+                if (permission === 'security-key') return callback(false); 
                 callback(true);
             });
 
-            sess.webRequest.onBeforeSendHeaders({ 
-                urls: ['*://*.google.com/*', '*://*.accounts.google.com/*', '*://*.youtube.com/*'] 
-            }, (details, callback) => {
-                details.requestHeaders['User-Agent'] = CHROME_USER_AGENT;
+            sess.webRequest.onBeforeSendHeaders((details, callback) => {
+                details.requestHeaders['User-Agent'] = SAFARI_UA;
+                
+                // Wir MÜSSEN Chromium-Client-Hints rigoros löschen!
                 delete details.requestHeaders['sec-ch-ua'];
                 delete details.requestHeaders['sec-ch-ua-mobile'];
                 delete details.requestHeaders['sec-ch-ua-platform'];
+                delete details.requestHeaders['X-Client-Data'];
+                
+                details.requestHeaders['Accept-Language'] = 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7';
+                
                 callback({ cancel: false, requestHeaders: details.requestHeaders });
             });
         });
@@ -118,21 +108,16 @@ if (!gotTheLock) {
         setupContextMenus();
         setupExtensions();
 
-        // --- AUTO UPDATER LOGIK ---
         autoUpdater.autoDownload = false; 
-        
         autoUpdater.on('update-available', (info) => {
             if (mainWindow) mainWindow.webContents.send('update-available', info.version);
         });
-
         autoUpdater.on('update-downloaded', () => {
             if (mainWindow) mainWindow.webContents.send('update-downloaded');
         });
-
         autoUpdater.checkForUpdatesAndNotify();
     }
 
-    // --- APP LIFECYCLE ---
     app.whenReady().then(() => {
         createWindow();
         app.on('activate', () => {
@@ -162,17 +147,9 @@ if (!gotTheLock) {
         } 
     });
 
-    // --- IPC HANDLERS ---
     ipcMain.on('download-update', () => { autoUpdater.downloadUpdate(); });
     ipcMain.on('install-update', () => { autoUpdater.quitAndInstall(true, true); });
     ipcMain.on('quit-app', () => { app.quit(); });
-
-    ipcMain.handle('get-drm-state', () => drmEnabled);
-    ipcMain.handle('set-drm-state', (event, state) => {
-        fs.writeFileSync(drmConfigPath, JSON.stringify({ enabled: state }));
-        app.relaunch(); 
-        app.exit(0); 
-    });
 
     ipcMain.handle('is-default-browser', () => app.isDefaultProtocolClient('http'));
     ipcMain.handle('set-as-default-browser', async () => {
@@ -227,14 +204,16 @@ if (!gotTheLock) {
         return { success: false, canceled: true };
     });
 
-    // --- NEU: DEEP SEARCH & NATIVE GEMINI API (Spare Credits + Live Google Suche) ---
+    // --- DEEP SEARCH & UNSTOPPABLE AI FALLBACK CHAIN ---
     ipcMain.handle('fetch-ai', async (event, messagesArray) => {
         try {
             if (!Array.isArray(messagesArray) || messagesArray.length === 0) return { success: false, error: "Leerer Chatverlauf." };
             
-            const GOOGLE_API_KEY = "DEIN_EIGENER_KEY_HIER";
-            
-            // Format für die direkte, offizielle Gemini API anpassen
+            // ========================================================
+            // FÜGE DEINEN API KEY HIER ZWISCHEN DIE "" EIN !!!
+            // ========================================================
+            const GOOGLE_API_KEY = "DEIN_EIGENER_KEY_HIER"; 
+
             let contents = [];
             let sysInstr = null;
 
@@ -262,44 +241,74 @@ if (!gotTheLock) {
                 contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: parts });
             });
 
-            // Wir nutzen gemini-2.5-flash: Extrem intelligent, free tier, unterstützt Google Deep Search perfekt!
-            const modelName = "gemini-2.5-flash"; 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GOOGLE_API_KEY}`;
-            
-            const payload = {
-                contents: contents,
-                tools: [{ googleSearch: {} }] // HIER WIRD DIE DEEP SEARCH VON GOOGLE AKTIVIERT!
-            };
-            if (sysInstr) {
-                payload.systemInstruction = { parts: [{ text: sysInstr }] };
-            }
+            const modelChain = [
+                "gemini-2.5-flash-lite", 
+                "gemini-2.5-flash",      
+                "gemini-2.5-pro",        
+                "gemini-3.0-flash",      
+                "gemini-3.0-pro",        
+                "gemini-2.0-flash"       
+            ];
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            let lastError = "Ein unbekannter Fehler ist aufgetreten.";
 
-            const data = await response.json();
-            
-            if (!response.ok) {
-                return { success: false, error: data.error?.message || `HTTP ${response.status}` };
-            }
+            for (const modelName of modelChain) {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GOOGLE_API_KEY}`;
+                
+                const payload = {
+                    contents: contents,
+                    tools: [{ googleSearch: {} }] 
+                };
+                
+                if (sysInstr) {
+                    payload.systemInstruction = { parts: [{ text: sysInstr }] };
+                }
 
-            let text = data.candidates[0].content.parts[0].text;
-            let sources = [];
-            
-            // Extrahiere die Google-Suchergebnisse (Grounding Metadata), damit der Browser sie hübsch mit Logos anzeigen kann!
-            if (data.candidates[0].groundingMetadata && data.candidates[0].groundingMetadata.groundingChunks) {
-                sources = data.candidates[0].groundingMetadata.groundingChunks.map(chunk => {
-                    if (chunk.web && chunk.web.uri) {
-                        return { title: chunk.web.title, url: chunk.web.uri };
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        let text = data.candidates[0].content.parts[0].text;
+                        let sources = [];
+                        
+                        if (data.candidates[0].groundingMetadata && data.candidates[0].groundingMetadata.groundingChunks) {
+                            sources = data.candidates[0].groundingMetadata.groundingChunks.map(chunk => {
+                                if (chunk.web && chunk.web.uri) {
+                                    return { title: chunk.web.title, url: chunk.web.uri };
+                                }
+                                return null;
+                            }).filter(Boolean);
+                        }
+
+                        return { success: true, text: text, usedModel: modelName, sources: sources };
+                        
+                    } else {
+                        let errorMsg = data.error?.message || `HTTP ${response.status}`;
+                        
+                        if (errorMsg.includes('Quota exceeded') || response.status === 429) {
+                            lastError = `Limits für mehrere Modelle erreicht. Zuletzt gescheitert: ${modelName}.`;
+                            continue; 
+                        } else {
+                            if (errorMsg.includes('API key not valid')) {
+                                return { success: false, error: "Dein API Key ist ungültig! Bitte überprüfe ihn in der main.js." };
+                            }
+                            return { success: false, error: `Fehler bei ${modelName}: ${errorMsg}` };
+                        }
                     }
-                    return null;
-                }).filter(Boolean);
+                } catch (fetchError) {
+                    lastError = `Verbindungsfehler bei ${modelName}: ${fetchError.message}`;
+                    continue; 
+                }
             }
 
-            return { success: true, text: text, usedModel: modelName, sources: sources };
+            return { success: false, error: "Alle Modelle in der Fallback-Kette haben ihr Limit erreicht! " + lastError };
+
         } catch (error) { return { success: false, error: error.message }; }
     });
 
@@ -353,7 +362,6 @@ if (!gotTheLock) {
     ipcMain.handle('clear-data', async() => { await session.defaultSession.clearStorageData(); if (fs.existsSync(loginsPath)) fs.unlinkSync(loginsPath); return true; });
     ipcMain.handle('clear-cookies', async(event, domain) => { const cookies = await session.defaultSession.cookies.get({ domain }); for (const c of cookies) { let url = (c.secure ? 'https://' : 'http://') + c.domain + c.path; await session.defaultSession.cookies.remove(url, c.name); } return true; });
 
-    // --- IPC ON (EVENTS) ---
     ipcMain.on('save-extension-state', (event, id, state) => { 
         const statesFile = path.join(app.getPath('userData'), 'extensions_state.json'); 
         let states = {}; 
@@ -418,7 +426,13 @@ if (!gotTheLock) {
     });
 
     function setupAdblocker() {
-        const blockList = ['*://*.doubleclick.net/*', '*://partner.googleadservices.com/*', '*://*.googlesyndication.com/*', '*://*.google-analytics.com/*', '*://adservice.google.com/*', '*://*.amazon-adsystem.com/*', '*://*.scorecardresearch.com/*', '*://*.outbrain.com/*', '*://*.taboola.com/*', '*://*.youtube.com/pagead/*', '*://*.youtube.com/api/stats/ads*', '*://*.youtube.com/ptracking/*', '*://*.youtube.com/get_midroll_info*', '*://*.googlevideo.com/*&adformat=*', '*://*.googlevideo.com/*&ad_type=*', '*://*.googlevideo.com/*&adurl=*', '*://*.criteo.com/*', '*://*.rubiconproject.com/*', '*://*.moatads.com/*', '*://*.appnexus.com/*', '*://*.openx.net/*'];
+        const blockList = [
+            '*://*.doubleclick.net/*', '*://partner.googleadservices.com/*',
+            '*://*.google-analytics.com/*', '*://adservice.google.com/*', '*://*.amazon-adsystem.com/*',
+            '*://*.scorecardresearch.com/*', '*://*.outbrain.com/*', '*://*.taboola.com/*',
+            '*://*.criteo.com/*', '*://*.rubiconproject.com/*', '*://*.moatads.com/*', '*://*.appnexus.com/*',
+            '*://*.openx.net/*', '*://*.facebook.com/tr/*', '*://*.tiktok.com/api/ad/*'
+        ];
         const blockHandler = (details, callback) => {
             if (!adblockEnabled) return callback({ cancel: false });
             if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.webContents.send('ad-blocked', 1); }
@@ -462,24 +476,28 @@ if (!gotTheLock) {
     function setupExtensions() {
         const extPath = path.join(app.getPath('userData'), 'extensions');
         if (!fs.existsSync(extPath)) fs.mkdirSync(extPath, { recursive: true });
-        let dirs = []; try { dirs = fs.readdirSync(extPath); } catch (e) {}
-        if (dirs.length < 5) {
-            const extensionsToCreate = [
-                { id: 'yt-skipper', name: "YouTube Ad Skipper", desc: "Überspringt Video-Ads sofort.", script: `setInterval(() => { const btn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button'); if(btn) btn.click(); }, 500);` },
-                { id: 'yt-pro-design', name: "YouTube Pro Design", desc: "Macht YouTube moderner (Shorts weg, Ränder rund).", css: `ytd-rich-section-renderer.ytd-rich-grid-renderer, [is-shorts], ytd-reel-shelf-renderer { display: none !important; } ytd-thumbnail, ytd-thumbnail-overlay-time-status-renderer { border-radius: 12px !important; } #background.ytd-masthead { background: rgba(15,15,19,0.85) !important; backdrop-filter: blur(15px); border-bottom: 1px solid rgba(255,255,255,0.1); }` },
-                { id: 'video-pip', name: "Video PiP Mode", desc: "Drücke Alt+P auf Videos für den Mini-Player.", script: `document.addEventListener('keydown', (e) => { if(e.altKey && e.key.toLowerCase()==='p'){ const v = document.querySelector('video'); if(v){ document.pictureInPictureElement ? document.exitPictureInPicture() : v.requestPictureInPicture(); } } });` },
-                { id: 'dark-mode', name: "Universal Dark Mode", desc: "Drücke Strg+Alt+D, um den Dark Mode überall umzuschalten.", script: `let isDark=false; document.addEventListener('keydown', (e) => { if(e.ctrlKey && e.altKey && e.key.toLowerCase()==='d'){ isDark=!isDark; document.documentElement.style.filter = isDark ? 'invert(1) hue-rotate(180deg)' : ''; document.documentElement.style.background = isDark ? '#fff' : ''; document.querySelectorAll('img, picture, video').forEach(m => m.style.filter = isDark ? 'invert(1) hue-rotate(180deg)' : ''); }});` },
-                { id: 'custom-scroll', name: "Modern Scrollbars", desc: "Macht alle Scrollbars schöner.", script: `const style = document.createElement('style'); style.textContent = '::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #6366f188; border-radius: 5px; } ::-webkit-scrollbar-thumb:hover { background: #6366f1; }'; document.head.appendChild(style);` },
-                { id: 'smooth-scroll', name: "Smooth Scrolling", desc: "Erzwingt weiches Scrollen auf allen Webseiten.", script: `document.documentElement.style.setProperty('scroll-behavior', 'smooth', 'important');` }
-            ];
-            extensionsToCreate.forEach(ext => {
-                const p = path.join(extPath, ext.id);
-                if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-                fs.writeFileSync(path.join(p, 'manifest.json'), JSON.stringify({ name: ext.name, version: "1.0", description: ext.desc, css: ext.css ? 'style.css' : undefined }));
-                if (ext.script) fs.writeFileSync(path.join(p, 'script.js'), ext.script);
-                if (ext.css) fs.writeFileSync(path.join(p, 'style.css'), ext.css);
-            });
-        }
+
+        const extensionsToCreate = [
+            { id: 'yt-pro-design', name: "YouTube Pro Design", desc: "Macht YouTube moderner (Shorts weg, Ränder rund).", css: `ytd-rich-section-renderer.ytd-rich-grid-renderer, [is-shorts], ytd-reel-shelf-renderer { display: none !important; } ytd-thumbnail, ytd-thumbnail-overlay-time-status-renderer { border-radius: 12px !important; } #background.ytd-masthead { background: rgba(15,15,19,0.85) !important; backdrop-filter: blur(15px); border-bottom: 1px solid rgba(255,255,255,0.1); }` },
+            { id: 'video-pip', name: "Video PiP Mode", desc: "Drücke Alt+P auf Videos für den Mini-Player.", script: `document.addEventListener('keydown', (e) => { if(e.altKey && e.key.toLowerCase()==='p'){ const v = document.querySelector('video'); if(v){ document.pictureInPictureElement ? document.exitPictureInPicture() : v.requestPictureInPicture(); } } });` },
+            { id: 'dark-mode', name: "Universal Dark Mode", desc: "Drücke Strg+Alt+D, um den Dark Mode überall umzuschalten.", script: `let isDark=false; document.addEventListener('keydown', (e) => { if(e.ctrlKey && e.altKey && e.key.toLowerCase()==='d'){ isDark=!isDark; document.documentElement.style.filter = isDark ? 'invert(1) hue-rotate(180deg)' : ''; document.documentElement.style.background = isDark ? '#fff' : ''; document.querySelectorAll('img, picture, video').forEach(m => m.style.filter = isDark ? 'invert(1) hue-rotate(180deg)' : ''); }});` },
+            { id: 'custom-scroll', name: "Modern Scrollbars", desc: "Macht alle Scrollbars schöner.", script: `
+                if (!window.location.hostname.includes('discord.com') && !window.location.hostname.includes('twitch.tv')) {
+                    const style = document.createElement('style'); 
+                    style.textContent = '::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.5); border-radius: 5px; } ::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.8); }'; 
+                    document.head.appendChild(style);
+                }
+            `},
+            { id: 'smooth-scroll', name: "Smooth Scrolling", desc: "Erzwingt weiches Scrollen auf allen Webseiten.", script: `document.documentElement.style.setProperty('scroll-behavior', 'smooth', 'important');` }
+        ];
+
+        extensionsToCreate.forEach(ext => {
+            const p = path.join(extPath, ext.id);
+            if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+            fs.writeFileSync(path.join(p, 'manifest.json'), JSON.stringify({ name: ext.name, version: "1.0", description: ext.desc, css: ext.css ? 'style.css' : undefined }));
+            if (ext.script) fs.writeFileSync(path.join(p, 'script.js'), ext.script);
+            if (ext.css) fs.writeFileSync(path.join(p, 'style.css'), ext.css);
+        });
     }
 
     function setupContextMenus() {
