@@ -66,4 +66,5 @@ Der Browser unterstützt eine Vielzahl an Hotkeys für schnelles Surfen (diese k
  * Alt + P : Video PiP Mode
 ## 🛡️ Datenschutz & Sicherheit
 Phil Browser Pro legt Wert auf deine Daten. Du kannst deine Cookies, den Verlauf und gespeicherte Passwörter jederzeit über die Einstellungen mit einem Klick löschen. Im Inkognito-Modus werden keine Verläufe lokal gespeichert.
+
 *Entwickelt mit ❤️ und Electron.*
