@@ -1,4 +1,3 @@
-```markdown
 # 🚀 Phil Browser Pro
 
 Willkommen beim **Phil Browser Pro** – einem modernen, blitzschnellen und funktionsreichen Desktop-Browser, der speziell für Power-User, Gamer und Produktivität entwickelt wurde. Basierend auf Electron kombiniert dieser Browser ein schlankes Design mit mächtigen integrierten Tools.
@@ -68,6 +67,3 @@ Der Browser unterstützt eine Vielzahl an Hotkeys für schnelles Surfen (diese k
 ## 🛡️ Datenschutz & Sicherheit
 Phil Browser Pro legt Wert auf deine Daten. Du kannst deine Cookies, den Verlauf und gespeicherte Passwörter jederzeit über die Einstellungen mit einem Klick löschen. Im Inkognito-Modus werden keine Verläufe lokal gespeichert.
 *Entwickelt mit ❤️ und Electron.*
-```
-
-```
