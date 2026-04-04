@@ -232,7 +232,7 @@ if (!gotTheLock) {
         try {
             if (!Array.isArray(messagesArray) || messagesArray.length === 0) return { success: false, error: "Leerer Chatverlauf." };
             
-            const GOOGLE_API_KEY = "AIzaSyDLCxowgHj5tgo7lsNCm1Lu_wjV6nw350U";
+            const GOOGLE_API_KEY = "DEIN_EIGENER_KEY_HIER";
             
             // Format für die direkte, offizielle Gemini API anpassen
             let contents = [];
